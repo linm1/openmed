@@ -68,3 +68,65 @@ def list_pages(doc_id: str) -> dict[str, Any]:
         "pages": [{"index": p.index, "text": p.text} for p in doc.pages],
         "redactedIndexes": sorted(doc.redacted_pages.keys()),
     }
+
+
+from pydantic import BaseModel, Field
+
+from .redactor import redact_page as _redact_page
+
+
+class RedactPageRequest(BaseModel):
+    docId: str
+    pageIndex: int = Field(ge=0)
+    method: str = "mask"
+
+
+class RedactBatchRequest(BaseModel):
+    docId: str
+    method: str = "mask"
+
+
+def _serialize_page(page) -> dict[str, Any]:
+    return {
+        "index": page.index,
+        "original": page.original,
+        "redacted": page.redacted,
+        "entities": list(page.entities),
+    }
+
+
+@app.post("/api/redact/page")
+def redact_page_endpoint(payload: RedactPageRequest) -> dict[str, Any]:
+    try:
+        doc = STORE.get(payload.docId)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown doc_id") from exc
+    if payload.pageIndex >= len(doc.pages):
+        raise HTTPException(status_code=400, detail="pageIndex out of range")
+    try:
+        page = _redact_page(
+            index=payload.pageIndex,
+            text=doc.pages[payload.pageIndex].text,
+            method=payload.method,  # type: ignore[arg-type]
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    STORE.set_redacted_page(payload.docId, page)
+    return {"page": _serialize_page(page)}
+
+
+@app.post("/api/redact/batch")
+def redact_batch_endpoint(payload: RedactBatchRequest) -> dict[str, Any]:
+    try:
+        doc = STORE.get(payload.docId)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown doc_id") from exc
+    pages_out: list[dict[str, Any]] = []
+    for slice_ in doc.pages:
+        try:
+            page = _redact_page(index=slice_.index, text=slice_.text, method=payload.method)  # type: ignore[arg-type]
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        STORE.set_redacted_page(payload.docId, page)
+        pages_out.append(_serialize_page(page))
+    return {"redactedCount": len(pages_out), "pages": pages_out}

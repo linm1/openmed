@@ -80,3 +80,64 @@ def test_list_pages_returns_text(client):
 def test_list_pages_404_when_unknown(client):
     resp = client.get("/api/documents/missing")
     assert resp.status_code == 404
+
+
+from types import SimpleNamespace
+
+from examples.redaction_studio import redactor as redactor_module
+
+
+def _patched_deid(text, method="mask", **kwargs):
+    return SimpleNamespace(deidentified_text=f"[REDACTED:{method}]", entities=[])
+
+
+def test_redact_page_endpoint_stores_result(client, monkeypatch):
+    monkeypatch.setattr(redactor_module, "_deidentify", _patched_deid)
+    raw = _make_docx([["secret one"], ["secret two"]])
+    doc_id = client.post(
+        "/api/upload",
+        files={"file": ("a.docx", raw, "application/octet-stream")},
+    ).json()["docId"]
+
+    resp = client.post(
+        "/api/redact/page",
+        json={"docId": doc_id, "pageIndex": 0, "method": "mask"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["page"]["redacted"] == "[REDACTED:mask]"
+    assert body["page"]["index"] == 0
+
+    listed = client.get(f"/api/documents/{doc_id}").json()
+    assert listed["redactedIndexes"] == [0]
+
+
+def test_redact_page_endpoint_rejects_bad_index(client, monkeypatch):
+    monkeypatch.setattr(redactor_module, "_deidentify", _patched_deid)
+    raw = _make_docx([["only"]])
+    doc_id = client.post(
+        "/api/upload",
+        files={"file": ("a.docx", raw, "application/octet-stream")},
+    ).json()["docId"]
+
+    resp = client.post(
+        "/api/redact/page",
+        json={"docId": doc_id, "pageIndex": 99, "method": "mask"},
+    )
+    assert resp.status_code == 400
+
+
+def test_redact_batch_endpoint_redacts_every_page(client, monkeypatch):
+    monkeypatch.setattr(redactor_module, "_deidentify", _patched_deid)
+    raw = _make_docx([["a"], ["b"], ["c"]])
+    doc_id = client.post(
+        "/api/upload",
+        files={"file": ("a.docx", raw, "application/octet-stream")},
+    ).json()["docId"]
+
+    resp = client.post("/api/redact/batch", json={"docId": doc_id, "method": "hash"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["redactedCount"] == 3
+    assert sorted(p["index"] for p in body["pages"]) == [0, 1, 2]
+    assert all(p["redacted"] == "[REDACTED:hash]" for p in body["pages"])
