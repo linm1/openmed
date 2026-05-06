@@ -46,9 +46,10 @@ def _entity_score(entity: object) -> float:
 def _ner_pass(doc: UploadedDoc, ctx: RedactionContext) -> list[RawEntity]:
     entities: list[RawEntity] = []
     for page in doc.pages:
-        leading_whitespace = len(page.text) - len(page.text.lstrip())
+        stripped_text = page.text.lstrip()
+        leading_whitespace = len(page.text) - len(stripped_text)
         result = _deidentify(
-            page.text,
+            stripped_text,
             confidence_threshold=ctx.confidence_threshold,
         )
         for entity in _result_entities(result):

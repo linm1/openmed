@@ -19,7 +19,7 @@ def _make_doc(pages: list[str]) -> UploadedDoc:
             PageSlice(page_number=i, text=text, original_bytes=text.encode())
             for i, text in enumerate(pages)
         ],
-        uploaded_at=datetime.datetime.utcnow(),
+        uploaded_at=datetime.datetime.now(datetime.timezone.utc),
     )
 
 
@@ -41,7 +41,7 @@ def _make_deidentify_result(original_text: str, pii_entities: list[PIIEntity]) -
         deidentified_text=original_text,
         pii_entities=pii_entities,
         method="mask",
-        timestamp=datetime.datetime.utcnow(),
+        timestamp=datetime.datetime.now(datetime.timezone.utc),
     )
 
 
@@ -125,9 +125,15 @@ def test_ner_pass_restores_offsets_after_leading_whitespace(monkeypatch):
         ],
     )
 
-    monkeypatch.setattr(pipeline, "_deidentify", MagicMock(return_value=fake_result))
+    deidentify_mock = MagicMock(return_value=fake_result)
+    monkeypatch.setattr(pipeline, "_deidentify", deidentify_mock)
 
     entities = pipeline._ner_pass(doc, ctx)
+
+    deidentify_mock.assert_called_once_with(
+        "John Smith",
+        confidence_threshold=ctx.confidence_threshold,
+    )
 
     assert entities == [
         RawEntity(
