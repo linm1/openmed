@@ -13,6 +13,19 @@ from examples.redaction_studio.pattern_loader import (
 )
 
 
+def _write_pack(tmp_path: Path, body: str) -> Path:
+    pack_path = tmp_path / "test.toml"
+    pack_path.write_text(
+        "[meta]\n"
+        'id = "test_pack"\n'
+        'name = "Test"\n'
+        'version = "0.1.0"\n\n'
+        f"{body.strip()}\n",
+        encoding="utf-8",
+    )
+    return pack_path
+
+
 def test_load_default_pack_returns_list():
     pack = load_pack()
     assert len(pack) > 0
@@ -60,20 +73,16 @@ def test_company_suffix_regex_avoids_ambiguous_whitespace_tail():
 
 
 def test_load_custom_path(tmp_path):
-    toml_text = '''
-[meta]
-id = "test_pack"
-name = "Test"
-version = "0.1.0"
-
+    p = _write_pack(
+        tmp_path,
+        '''
 [[patterns]]
 id = "foo"
 label = "FOO"
 regex = "\\\\bfoo\\\\b"
 enabled = true
-'''
-    p = tmp_path / "test.toml"
-    p.write_text(toml_text, encoding="utf-8")
+''',
+    )
     pack = load_pack(p)
     assert len(pack) == 1
     assert pack[0].id == "foo"
@@ -82,22 +91,84 @@ enabled = true
 
 
 def test_load_pack_rejects_whitespace_only_required_string_fields(tmp_path):
-    toml_text = '''
-[meta]
-id = "test_pack"
-name = "Test"
-version = "0.1.0"
-
+    pack_path = _write_pack(
+        tmp_path,
+        '''
 [[patterns]]
 id = "   "
 label = "FOO"
 regex = "\\\\bfoo\\\\b"
 enabled = true
-'''
-    pack_path = tmp_path / "invalid.toml"
-    pack_path.write_text(toml_text, encoding="utf-8")
+''',
+    )
 
     with pytest.raises(ValueError, match="pattern field 'id' must be a non-empty string"):
+        load_pack(pack_path)
+
+
+@pytest.mark.parametrize("field_name", ["regex", "post_validate"])
+def test_load_pack_rejects_invalid_regex_fields(tmp_path, field_name):
+    pattern_lines = [
+        'id = "foo"',
+        'label = "FOO"',
+        'regex = "\\\\bfoo\\\\b"',
+        "enabled = true",
+    ]
+    if field_name == "regex":
+        pattern_lines[2] = 'regex = "["'
+    else:
+        pattern_lines.insert(3, 'post_validate = "["')
+
+    pack_path = _write_pack(tmp_path, "[[patterns]]\n" + "\n".join(pattern_lines))
+
+    with pytest.raises(ValueError, match=rf"pattern 'foo' has invalid {field_name}:"):
+        load_pack(pack_path)
+
+
+def test_load_pack_rejects_non_list_patterns(tmp_path):
+    pack_path = _write_pack(
+        tmp_path,
+        '''
+[patterns]
+id = "foo"
+label = "FOO"
+regex = "\\\\bfoo\\\\b"
+enabled = true
+''',
+    )
+
+    with pytest.raises(ValueError, match=r"pattern pack must define \[\[patterns\]\] entries"):
+        load_pack(pack_path)
+
+
+def test_load_pack_rejects_non_table_pattern_entry(tmp_path):
+    pack_path = tmp_path / "test.toml"
+    pack_path.write_text(
+        'patterns = ["foo"]\n\n'
+        "[meta]\n"
+        'id = "test_pack"\n'
+        'name = "Test"\n'
+        'version = "0.1.0"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="each pattern entry must be a TOML table"):
+        load_pack(pack_path)
+
+
+def test_load_pack_rejects_non_bool_enabled(tmp_path):
+    pack_path = _write_pack(
+        tmp_path,
+        '''
+[[patterns]]
+id = "foo"
+label = "FOO"
+regex = "\\\\bfoo\\\\b"
+enabled = "true"
+''',
+    )
+
+    with pytest.raises(ValueError, match=r"pattern 'foo' field 'enabled' must be a bool"):
         load_pack(pack_path)
 
 
