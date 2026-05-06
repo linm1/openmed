@@ -112,7 +112,10 @@ def _serialize_context(context: RedactionContext) -> dict[str, Any]:
 
 def _run_pipeline(doc: UploadedDoc) -> UploadedDoc:
     pages, summary = pipeline.run(doc, _pack, doc.context)
-    return store.replace_pipeline_output(doc.doc_id, pages=pages, summary=summary)
+    try:
+        return store.replace_pipeline_output(doc.doc_id, pages=pages, summary=summary)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown doc_id") from exc
 
 
 @app.post("/api/upload")
