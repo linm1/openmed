@@ -8,7 +8,7 @@ import pytest
 
 from examples.redaction_studio import pipeline
 from examples.redaction_studio.pattern_loader import load_pack
-from examples.redaction_studio.types import PageSlice, RawEntity, RedactionContext, UploadedDoc
+from examples.redaction_studio.types import CanonicalEntity, PageSlice, RawEntity, RedactionContext, UploadedDoc
 from openmed.core.pii import DeidentificationResult, PIIEntity
 
 
@@ -329,3 +329,72 @@ def test_user_term_pass_is_case_sensitive():
     entities = pipeline._user_term_pass(doc, ctx)
 
     assert entities == []
+
+
+def test_build_canonical_assigns_stable_tokens():
+    entities = [
+        _make_raw_entity("ORG", "Acme Inc.", page=0, start=10),
+        _make_raw_entity("ORG", "Beta Corp.", page=0, start=30),
+        _make_raw_entity("ORG", "Acme Inc.", page=1, start=5),
+    ]
+
+    canon = pipeline._build_canonical(entities)
+
+    assert canon["acme inc."].token == "[ORG_1]"
+    assert canon["beta corp."].token == "[ORG_2]"
+    assert canon["acme inc."].occurrences == 2
+
+
+def test_build_canonical_groups_by_label():
+    entities = [
+        _make_raw_entity("STUDY_ID", "NCT12345678", page=0, start=0),
+        _make_raw_entity("ORG", "Acme Inc.", page=0, start=25),
+    ]
+
+    canon = pipeline._build_canonical(entities)
+
+    assert canon["nct12345678"].token == "[STUDY_ID_1]"
+    assert canon["acme inc."].token == "[ORG_1]"
+
+
+def test_propagate_finds_unlabelled_occurrence():
+    doc = _make_doc([
+        "Acme Inc. sponsored the study.",
+        "Later, Acme Inc. appeared again.",
+    ])
+    canon = {
+        "acme inc.": CanonicalEntity(token="[ORG_1]", label="ORG", occurrences=1)
+    }
+
+    new_entities = pipeline._propagate(doc, canon)
+
+    pages_hit = {entity.page for entity in new_entities}
+    assert 1 in pages_hit
+    assert new_entities
+    assert all(entity.source == "propagate" for entity in new_entities)
+
+
+def test_resolve_overlaps_keeps_longest():
+    entities = [
+        _make_raw_entity("ORG", "Acme Inc.", start=0),
+        _make_raw_entity("ORG", "Acme", start=0),
+    ]
+
+    resolved = pipeline._resolve_overlaps(entities)
+
+    assert resolved == [_make_raw_entity("ORG", "Acme Inc.", start=0)]
+
+
+def test_run_returns_redacted_pages_and_summary(monkeypatch):
+    doc = _make_doc(["NCT12345678 sponsored by Acme Inc."])
+    ctx = RedactionContext()
+    pack = load_pack()
+
+    monkeypatch.setattr(pipeline, "_deidentify", MagicMock(return_value=SimpleNamespace(pii_entities=[])))
+
+    pages, summary = pipeline.run(doc, pack, ctx)
+
+    assert isinstance(pages, list)
+    assert len(pages) == 1
+    assert isinstance(summary, dict)
+    assert any(entry["token"].find("STUDY_ID") >= 0 for entry in summary.values())
