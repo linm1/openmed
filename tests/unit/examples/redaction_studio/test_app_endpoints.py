@@ -29,9 +29,9 @@ def _make_doc(*, doc_id: str = "doc-1") -> UploadedDoc:
 
 @pytest.fixture(autouse=True)
 def _clear_store():
-    app_module.STORE._docs.clear()
+    app_module.store._docs.clear()
     yield
-    app_module.STORE._docs.clear()
+    app_module.store._docs.clear()
 
 
 @pytest.fixture
@@ -65,7 +65,7 @@ def test_download_sanitizes_content_disposition_filename(
 ):
     doc = _make_doc(doc_id="doc-download")
     doc.filename = 'evil\\danger"\r\nname.pdf'
-    app_module.STORE.put(doc)
+    app_module.store.put(doc)
     monkeypatch.setattr(
         app_module,
         "_write_doc",
@@ -83,7 +83,7 @@ def test_download_sanitizes_content_disposition_filename(
 
 def test_patch_context_updates_confidence(client: TestClient):
     doc = _make_doc()
-    app_module.STORE.put(doc)
+    app_module.store.put(doc)
 
     response = client.patch(
         f"/api/documents/{doc.doc_id}/context",
@@ -91,7 +91,7 @@ def test_patch_context_updates_confidence(client: TestClient):
     )
 
     assert response.status_code == 200, response.text
-    assert app_module.STORE.get(doc.doc_id).context.confidence_threshold == 0.75
+    assert app_module.store.get(doc.doc_id).context.confidence_threshold == 0.75
 
 
 def test_patch_context_clears_redacted_pages_cache(client: TestClient):
@@ -107,7 +107,7 @@ def test_patch_context_clears_redacted_pages_cache(client: TestClient):
         "label": "NAME",
         "occurrences": 2,
     }
-    app_module.STORE.put(doc)
+    app_module.store.put(doc)
 
     response = client.patch(
         f"/api/documents/{doc.doc_id}/context",
@@ -115,15 +115,41 @@ def test_patch_context_clears_redacted_pages_cache(client: TestClient):
     )
 
     assert response.status_code == 200, response.text
-    updated = app_module.STORE.get(doc.doc_id)
+    updated = app_module.store.get(doc.doc_id)
     assert updated.context.custom_terms == ("trial",)
     assert updated.redacted_pages == {}
     assert updated.canonical_summary == {}
 
 
+def test_upload_rejects_oversized_payload_before_parsing(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    detect_format_mock = MagicMock(return_value="pdf")
+    parse_mock = MagicMock()
+    monkeypatch.setattr(app_module, "detect_format", detect_format_mock, raising=False)
+    monkeypatch.setattr(app_module, "parse", parse_mock, raising=False)
+
+    response = client.post(
+        "/api/upload",
+        files={
+            "file": (
+                "large.pdf",
+                b"x" * (app_module.MAX_UPLOAD_BYTES + 1),
+                "application/pdf",
+            )
+        },
+    )
+
+    assert response.status_code == 413, response.text
+    assert response.json() == {"detail": "File exceeds 25 MB limit"}
+    detect_format_mock.assert_not_called()
+    parse_mock.assert_not_called()
+
+
 def test_redact_page_uses_pipeline(client: TestClient, monkeypatch: pytest.MonkeyPatch):
     doc = _make_doc()
-    app_module.STORE.put(doc)
+    app_module.store.put(doc)
     run_mock = MagicMock(
         return_value=(
             [
@@ -174,7 +200,7 @@ def test_legacy_redact_routes_ignore_method_field(
     monkeypatch: pytest.MonkeyPatch,
 ):
     doc = _make_doc()
-    app_module.STORE.put(doc)
+    app_module.store.put(doc)
     run_mock = MagicMock(
         return_value=(
             [

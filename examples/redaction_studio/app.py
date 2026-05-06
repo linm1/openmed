@@ -15,6 +15,7 @@ from .document_parser import detect_format, parse
 from .document_writer import write as _write_doc
 from .pattern_loader import DEFAULT_PACK_PATH, load_pack
 from .store import DocStore
+from .types import RedactedPage, RedactionContext
 from .types import UploadedDoc
 
 try:
@@ -26,7 +27,6 @@ ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
 
 store = DocStore()
-STORE = store
 MAX_PATTERN_PREVIEW_CHARS = 120
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
 
@@ -102,19 +102,12 @@ def _get_doc_or_404(doc_id: str) -> UploadedDoc:
         raise HTTPException(status_code=404, detail="Unknown doc_id") from exc
 
 
-def _serialize_context(context) -> dict[str, Any]:
+def _serialize_context(context: RedactionContext) -> dict[str, Any]:
     return {
         "customTerms": list(context.custom_terms),
         "confidenceThreshold": context.confidence_threshold,
         "enabledPatternIds": list(context.enabled_pattern_ids),
     }
-
-
-class PatternResponse(BaseModel):
-    id: str
-    label: str
-    regex_preview: str
-    enabled_by_default: bool
 
 
 def _run_pipeline(doc: UploadedDoc) -> UploadedDoc:
@@ -124,7 +117,7 @@ def _run_pipeline(doc: UploadedDoc) -> UploadedDoc:
 
 @app.post("/api/upload")
 async def upload(file: UploadFile = File(...)) -> dict[str, Any]:
-    raw = await file.read()
+    raw = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(raw) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="File exceeds 25 MB limit")
     try:
@@ -186,7 +179,7 @@ class DocumentRedactPageRequest(BaseModel):
     page: int = Field(ge=0)
 
 
-def _serialize_page(page) -> dict[str, Any]:
+def _serialize_page(page: RedactedPage) -> dict[str, Any]:
     return {
         "index": page.index,
         "original": page.original,
