@@ -25,7 +25,7 @@ def redact_page(*, index: int, text: str, method: Method = "mask") -> RedactedPa
             "text": getattr(e, "text", ""),
             "score": float(getattr(e, "confidence", getattr(e, "score", 0.0))),
         }
-        for e in (result.entities or [])
+        for e in (result.pii_entities or [])
     )
     return RedactedPage(
         index=index,
