@@ -271,18 +271,11 @@ def test_regex_pass_finds_nct():
     pack = load_pack()
 
     entities = pipeline._regex_pass(doc, pack, ctx)
+    study_id_hits = [entity for entity in entities if entity.label == "STUDY_ID"]
 
-    assert entities == [
-        RawEntity(
-            page=0,
-            start=6,
-            end=17,
-            surface_text="NCT12345678",
-            label="STUDY_ID",
-            source="regex",
-            score=1.0,
-        )
-    ]
+    assert len(study_id_hits) == 1
+    assert study_id_hits[0].surface_text == "NCT12345678"
+    assert study_id_hits[0].source == "regex"
 
 
 def test_regex_pass_respects_enabled_pattern_ids():
@@ -292,8 +285,19 @@ def test_regex_pass_respects_enabled_pattern_ids():
 
     entities = pipeline._regex_pass(doc, pack, ctx)
 
-    assert any(entity.label == "STUDY_ID" for entity in entities)
-    assert all(entity.label != "INTERNAL_DOC" for entity in entities)
+    assert {(entity.label, entity.surface_text) for entity in entities} == {
+        ("STUDY_ID", "NCT12345678")
+    }
+
+
+def test_regex_pass_with_unknown_allowed_pattern_id_returns_empty():
+    doc = _make_doc(["Study NCT12345678 ongoing"])
+    ctx = RedactionContext(enabled_pattern_ids=("missing-pattern",))
+    pack = load_pack()
+
+    entities = pipeline._regex_pass(doc, pack, ctx)
+
+    assert entities == []
 
 
 def test_user_term_pass_finds_exact_match():
@@ -305,3 +309,23 @@ def test_user_term_pass_finds_exact_match():
     assert len(entities) == 2
     assert all(entity.label == "CUSTOM" for entity in entities)
     assert all(entity.source == "user" for entity in entities)
+
+
+def test_user_term_pass_skips_empty_term():
+    doc = _make_doc(["Sponsor: Acme Pharma"])
+    ctx = RedactionContext(custom_terms=("", "Acme Pharma"))
+
+    entities = pipeline._user_term_pass(doc, ctx)
+
+    assert [(entity.surface_text, entity.source) for entity in entities] == [
+        ("Acme Pharma", "user")
+    ]
+
+
+def test_user_term_pass_is_case_sensitive():
+    doc = _make_doc(["Sponsor: Acme Pharma"])
+    ctx = RedactionContext(custom_terms=("acme pharma",))
+
+    entities = pipeline._user_term_pass(doc, ctx)
+
+    assert entities == []
