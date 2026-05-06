@@ -1,0 +1,42 @@
+[meta]
+id = "clinical_trial_v1"
+name = "Clinical Trial Standard"
+version = "1.0.0"
+
+[[patterns]]
+id = "drug_compound_code"
+label = "STUDY_DRUG"
+regex = "\\b(?:[A-Z]{2,6}-\\d{3,8}|[A-Z]{2,6}\\d{3,8})\\b"
+post_validate = "\\b[A-Z]{2,6}-\\d{3,8}\\b"
+enabled = true
+
+[[patterns]]
+id = "nct_study_id"
+label = "STUDY_ID"
+regex = "\\bNCT\\d{8}\\b"
+enabled = true
+
+[[patterns]]
+id = "sop_doc_id"
+label = "INTERNAL_DOC"
+regex = "\\bSOP[-_ ]?\\d{3,}\\b"
+enabled = true
+
+[[patterns]]
+id = "project_number_6digit"
+label = "PROJECT_NUMBER"
+regex = "\\b(?:PROJECT[-_ ]?)?\\d{6}\\b"
+post_validate = "\\b\\d{6}\\b"
+enabled = true
+
+[[patterns]]
+id = "company_suffix"
+label = "ORG"
+regex = "\\b(?:[A-Z][A-Za-z0-9&.,'/-]*)(?:\\s+[A-Z][A-Za-z0-9&.,'/-]*)*\\s(?:Inc\\.?|Ltd\\.?|LLC|Corp\\.?|Corporation|Company|Co\\.?|GmbH|PLC|S\\.A\\.?)\\b"
+enabled = true
+
+[[patterns]]
+id = "version_string"
+label = "VERSION"
+regex = "\\b(?:Version\\s*)?\\d+(?:\\.\\d+){1,3}\\b"
+enabled = false
