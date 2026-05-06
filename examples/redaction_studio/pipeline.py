@@ -247,25 +247,48 @@ def _propagate_matches(
         (entity.page, entity.start, entity.end, entity.label)
         for entity in (existing_entities or [])
     }
+    existing_ranges_by_page: dict[int, list[tuple[int, int]]] = {}
+    for entity in existing_entities or []:
+        existing_ranges_by_page.setdefault(entity.page, []).append((entity.start, entity.end))
 
     for page in doc.pages:
+        candidate_matches: list[tuple[int, int, str, CanonicalEntity]] = []
         for pattern, canonical in patterns:
             for match in pattern.finditer(page.text):
                 span_key = (page.page_number, match.start(), match.end(), canonical.label)
                 if span_key in existing_spans:
                     continue
-                propagated.append(
-                    RawEntity(
-                        page=page.page_number,
-                        start=match.start(),
-                        end=match.end(),
-                        surface_text=match.group(0),
-                        label=canonical.label,
-                        source="propagate",
-                        score=1.0,
-                    )
+                candidate_matches.append((match.start(), match.end(), match.group(0), canonical))
+
+        blocked_ranges = list(existing_ranges_by_page.get(page.page_number, []))
+        accepted_matches: list[RawEntity] = []
+        for start, end, surface_text, canonical in sorted(
+            candidate_matches,
+            key=lambda item: (-(item[1] - item[0]), item[0], item[1]),
+        ):
+            overlaps_existing = any(
+                start < blocked_end and blocked_start < end
+                for blocked_start, blocked_end in blocked_ranges
+            )
+            if overlaps_existing:
+                continue
+
+            accepted_matches.append(
+                RawEntity(
+                    page=page.page_number,
+                    start=start,
+                    end=end,
+                    surface_text=surface_text,
+                    label=canonical.label,
+                    source="propagate",
+                    score=1.0,
                 )
-                existing_spans.add(span_key)
+            )
+            blocked_ranges.append((start, end))
+            existing_spans.add((page.page_number, start, end, canonical.label))
+
+        accepted_matches.sort(key=lambda entity: (entity.start, entity.end))
+        propagated.extend(accepted_matches)
     return propagated
 
 

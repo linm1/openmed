@@ -387,6 +387,32 @@ def test_propagate_finds_unlabelled_occurrence():
     assert all(entity.source == "propagate" for entity in new_entities)
 
 
+def test_propagate_skips_shorter_match_inside_existing_longer_span():
+    doc = _make_doc([
+        "Acme Inc. expanded.",
+        "Acme opened a new office.",
+    ])
+    canon = {
+        "acme inc.": CanonicalEntity(token="[ORG_1]", label="ORG", occurrences=1),
+        "acme": CanonicalEntity(token="[ORG_2]", label="ORG", occurrences=1),
+    }
+    existing_entities = [_make_raw_entity("ORG", "Acme Inc.", page=0, start=0)]
+
+    new_entities = pipeline._propagate(doc, canon, existing_entities)
+
+    assert new_entities == [
+        RawEntity(
+            page=1,
+            start=0,
+            end=4,
+            surface_text="Acme",
+            label="ORG",
+            source="propagate",
+            score=1.0,
+        )
+    ]
+
+
 def test_resolve_overlaps_keeps_longest():
     entities = [
         _make_raw_entity("ORG", "Acme Inc.", start=0),
@@ -400,10 +426,10 @@ def test_resolve_overlaps_keeps_longest():
 
 def test_run_returns_redacted_pages_and_summary(monkeypatch):
     doc = _make_doc([
-        "NCT12345678 sponsored by Acme Inc.",
-        "Later ACME INC. appeared again.",
+        "NCT12345678 sponsored by Acme Inc. for Project Atlas.",
+        "Later ACME INC. appeared again. Project Atlas remained confidential.",
     ])
-    ctx = RedactionContext()
+    ctx = RedactionContext(custom_terms=("Project Atlas",))
     pack = load_pack()
 
     monkeypatch.setattr(
@@ -431,12 +457,13 @@ def test_run_returns_redacted_pages_and_summary(monkeypatch):
     pages, summary = pipeline.run(doc, pack, ctx)
 
     assert [page.redacted for page in pages] == [
-        "[STUDY_ID_1] sponsored by [ORG_1]",
-        "Later [ORG_1] appeared again.",
+        "[STUDY_ID_1] sponsored by [ORG_1] for [CUSTOM_1].",
+        "Later [ORG_1] appeared again. [CUSTOM_1] remained confidential.",
     ]
     assert all("Acme Inc." not in page.redacted for page in pages)
     assert all("ACME INC." not in page.redacted for page in pages)
     assert "NCT12345678" not in pages[0].redacted
+    assert all("Project Atlas" not in page.redacted for page in pages)
     assert summary["nct12345678"] == {
         "token": "[STUDY_ID_1]",
         "label": "STUDY_ID",
@@ -445,5 +472,10 @@ def test_run_returns_redacted_pages_and_summary(monkeypatch):
     assert summary["acme inc."] == {
         "token": "[ORG_1]",
         "label": "ORG",
+        "occurrences": 2,
+    }
+    assert summary["project atlas"] == {
+        "token": "[CUSTOM_1]",
+        "label": "CUSTOM",
         "occurrences": 2,
     }
