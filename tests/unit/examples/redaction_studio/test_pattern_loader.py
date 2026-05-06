@@ -110,6 +110,27 @@ enabled = true
     assert [pattern.label for pattern in pack] == ["FOO"]
 
 
+def test_load_pack_trims_outer_regex_whitespace_before_compiling(tmp_path):
+    pack_path = _write_pack(
+        tmp_path,
+        r'''
+[[patterns]]
+id = "foo"
+label = "FOO"
+regex = '  \bfoo\b  '
+post_validate = '  ^foo$  '
+enabled = true
+''',
+    )
+
+    pack = load_pack(pack_path)
+
+    assert len(pack) == 1
+    assert pack[0].regex.search("foo bar") is not None
+    assert pack[0].post_validate is not None
+    assert pack[0].post_validate.search("foo") is not None
+
+
 def test_load_pack_rejects_whitespace_only_required_string_fields(tmp_path):
     pack_path = _write_pack(
         tmp_path,

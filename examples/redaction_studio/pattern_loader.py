@@ -30,7 +30,7 @@ def _require_string(value: object, *, field_name: str, normalize: bool = False) 
 
 
 def _compile_regex(value: object, *, field_name: str, pattern_id: str) -> re.Pattern[str]:
-    regex_text = _require_string(value, field_name=field_name)
+    regex_text = _require_string(value, field_name=field_name, normalize=True)
     try:
         return re.compile(regex_text)
     except re.error as exc:
