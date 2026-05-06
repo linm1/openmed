@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock
+
+import pytest
 
 from examples.redaction_studio import pipeline
 from examples.redaction_studio.types import PageSlice, RawEntity, RedactionContext, UploadedDoc
+from openmed.core.pii import DeidentificationResult, PIIEntity
 
 
 def _make_doc(pages: list[str]) -> UploadedDoc:
@@ -19,19 +23,42 @@ def _make_doc(pages: list[str]) -> UploadedDoc:
     )
 
 
+def _make_raw_entity(label: str, surface_text: str, *, page: int = 0, start: int = 0, score: float = 0.95) -> RawEntity:
+    return RawEntity(
+        page=page,
+        start=start,
+        end=start + len(surface_text),
+        surface_text=surface_text,
+        label=label,
+        source="ner",
+        score=score,
+    )
+
+
+def _make_deidentify_result(original_text: str, pii_entities: list[PIIEntity]) -> DeidentificationResult:
+    return DeidentificationResult(
+        original_text=original_text,
+        deidentified_text=original_text,
+        pii_entities=pii_entities,
+        method="mask",
+        timestamp=datetime.datetime.utcnow(),
+    )
+
+
 def test_ner_pass_returns_raw_entities(monkeypatch):
     doc = _make_doc(["John Smith"])
     ctx = RedactionContext(confidence_threshold=0.85)
-    fake_result = MagicMock()
-    fake_result.entities = [
-        MagicMock(
+    fake_result = SimpleNamespace(
+        entities=[
+            SimpleNamespace(
             text="John Smith",
             label="name",
             score=0.92,
             start=0,
             end=10,
         )
-    ]
+        ]
+    )
 
     monkeypatch.setattr(pipeline, "_deidentify", MagicMock(return_value=fake_result))
 
@@ -47,6 +74,128 @@ def test_ner_pass_returns_raw_entities(monkeypatch):
         source="ner",
         score=0.92,
     )
+
+
+def test_ner_pass_reads_real_deidentify_result_shape(monkeypatch):
+    doc = _make_doc(["John Smith"])
+    ctx = RedactionContext(confidence_threshold=0.85)
+    fake_result = _make_deidentify_result(
+        "John Smith",
+        [
+            PIIEntity(
+                text="John Smith",
+                label="name",
+                confidence=0.92,
+                start=0,
+                end=10,
+            )
+        ],
+    )
+
+    monkeypatch.setattr(pipeline, "_deidentify", MagicMock(return_value=fake_result))
+
+    entities = pipeline._ner_pass(doc, ctx)
+
+    assert entities == [
+        RawEntity(
+            page=0,
+            start=0,
+            end=10,
+            surface_text="John Smith",
+            label="name",
+            source="ner",
+            score=0.92,
+        )
+    ]
+
+
+def test_ner_pass_restores_offsets_after_leading_whitespace(monkeypatch):
+    doc = _make_doc(["  John Smith"])
+    ctx = RedactionContext(confidence_threshold=0.85)
+    fake_result = _make_deidentify_result(
+        "John Smith",
+        [
+            PIIEntity(
+                text="John Smith",
+                label="name",
+                confidence=0.92,
+                start=0,
+                end=10,
+            )
+        ],
+    )
+
+    monkeypatch.setattr(pipeline, "_deidentify", MagicMock(return_value=fake_result))
+
+    entities = pipeline._ner_pass(doc, ctx)
+
+    assert entities == [
+        RawEntity(
+            page=0,
+            start=2,
+            end=12,
+            surface_text="John Smith",
+            label="name",
+            source="ner",
+            score=0.92,
+        )
+    ]
+
+
+def test_ner_pass_maps_entities_to_their_source_pages(monkeypatch):
+    doc = _make_doc(["John Smith", "Call 555-123-4567"])
+    ctx = RedactionContext(confidence_threshold=0.85)
+    fake_results = [
+        _make_deidentify_result(
+            "John Smith",
+            [
+                PIIEntity(
+                    text="John Smith",
+                    label="name",
+                    confidence=0.92,
+                    start=0,
+                    end=10,
+                )
+            ],
+        ),
+        _make_deidentify_result(
+            "Call 555-123-4567",
+            [
+                PIIEntity(
+                    text="555-123-4567",
+                    label="phone_number",
+                    confidence=0.9,
+                    start=5,
+                    end=17,
+                )
+            ],
+        ),
+    ]
+
+    monkeypatch.setattr(pipeline, "_deidentify", MagicMock(side_effect=fake_results))
+
+    entities = pipeline._ner_pass(doc, ctx)
+
+    assert entities == [
+        RawEntity(
+            page=0,
+            start=0,
+            end=10,
+            surface_text="John Smith",
+            label="name",
+            source="ner",
+            score=0.92,
+        ),
+        RawEntity(
+            page=1,
+            start=5,
+            end=17,
+            surface_text="555-123-4567",
+            label="phone_number",
+            source="ner",
+            score=0.9,
+        ),
+    ]
 
 
 def test_post_validate_drops_spurious_health_plan_tag():
@@ -68,6 +217,25 @@ def test_post_validate_drops_spurious_health_plan_tag():
         source="ner",
         score=0.95,
     )
+
+    entities = pipeline._post_validate_ner([bad_entity, good_entity])
+
+    assert entities == [good_entity]
+
+
+@pytest.mark.parametrize(
+    ("label", "invalid_text", "valid_text"),
+    [
+        ("social_security_number", "123456789", "123-45-6789"),
+        ("phone_number", "call me", "+1 (555) 123-4567"),
+        ("date", "tomorrow", "01/15/1970"),
+        ("age", "age forty-two", "42"),
+        ("zip_code", "1234", "12345-6789"),
+    ],
+)
+def test_post_validate_applies_supported_label_validators(label, invalid_text, valid_text):
+    bad_entity = _make_raw_entity(label, invalid_text)
+    good_entity = _make_raw_entity(label, valid_text, start=len(invalid_text) + 1)
 
     entities = pipeline._post_validate_ner([bad_entity, good_entity])
 

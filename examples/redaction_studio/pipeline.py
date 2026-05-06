@@ -19,23 +19,48 @@ _LABEL_VALIDATORS: dict[str, re.Pattern[str]] = {
 }
 
 
+def _result_entities(result: object) -> object:
+    entities = getattr(result, "pii_entities", None)
+    if entities is not None:
+        return entities
+
+    entities = getattr(result, "entities", None)
+    if entities is not None:
+        return entities
+
+    raise AttributeError("deidentify result is missing `pii_entities` and `entities`.")
+
+
+def _entity_score(entity: object) -> float:
+    confidence = getattr(entity, "confidence", None)
+    if confidence is not None:
+        return float(confidence)
+
+    score = getattr(entity, "score", None)
+    if score is not None:
+        return float(score)
+
+    raise AttributeError("deidentify entity is missing `confidence` and `score`.")
+
+
 def _ner_pass(doc: UploadedDoc, ctx: RedactionContext) -> list[RawEntity]:
     entities: list[RawEntity] = []
     for page in doc.pages:
+        leading_whitespace = len(page.text) - len(page.text.lstrip())
         result = _deidentify(
             page.text,
             confidence_threshold=ctx.confidence_threshold,
         )
-        for entity in result.entities:
+        for entity in _result_entities(result):
             entities.append(
                 RawEntity(
                     page=page.page_number,
-                    start=entity.start,
-                    end=entity.end,
+                    start=entity.start + leading_whitespace,
+                    end=entity.end + leading_whitespace,
                     surface_text=entity.text,
                     label=entity.label,
                     source="ner",
-                    score=entity.score,
+                    score=_entity_score(entity),
                 )
             )
     return entities
