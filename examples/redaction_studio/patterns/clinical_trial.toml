@@ -26,13 +26,12 @@ enabled = true
 id = "project_number_6digit"
 label = "PROJECT_NUMBER"
 regex = "\\b(?:PROJECT[-_ ]?)?\\d{6}\\b"
-post_validate = "\\b\\d{6}\\b"
 enabled = true
 
 [[patterns]]
 id = "company_suffix"
 label = "ORG"
-regex = "\\b(?:[A-Z][A-Za-z0-9&.,'/-]*)(?:\\s+[A-Z][A-Za-z0-9&.,'/-]*)*\\s(?:Inc\\.?|Ltd\\.?|LLC|Corp\\.?|Corporation|Company|Co\\.?|GmbH|PLC|S\\.A\\.?)\\b"
+regex = "\\b(?:[A-Z][A-Za-z0-9&.,'/-]*\\s+)+(?:Inc\\.?|Ltd\\.?|LLC|Corp\\.?|Corporation|Company|Co\\.?|GmbH|PLC|S\\.A\\.?)\\b"
 enabled = true
 
 [[patterns]]

@@ -18,14 +18,13 @@ class CompiledPattern:
     label: str
     regex: re.Pattern[str]
     post_validate: re.Pattern[str] | None
-    enabled: bool
 
 
 PatternPack = list[CompiledPattern]
 
 
 def _require_string(value: object, *, field_name: str) -> str:
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str) or not value.strip():
         raise ValueError(f"pattern field '{field_name}' must be a non-empty string")
     return value
 
@@ -47,10 +46,6 @@ def _compile_pattern(raw_pattern: object) -> CompiledPattern:
     pattern_id = _require_string(raw_pattern.get("id"), field_name="id")
     label = _require_string(raw_pattern.get("label"), field_name="label")
 
-    enabled_value = raw_pattern.get("enabled", True)
-    if not isinstance(enabled_value, bool):
-        raise ValueError(f"pattern '{pattern_id}' field 'enabled' must be a bool")
-
     post_validate_value = raw_pattern.get("post_validate")
     post_validate = (
         None
@@ -67,7 +62,6 @@ def _compile_pattern(raw_pattern: object) -> CompiledPattern:
         label=label,
         regex=_compile_regex(raw_pattern.get("regex"), field_name="regex", pattern_id=pattern_id),
         post_validate=post_validate,
-        enabled=enabled_value,
     )
 
 
@@ -83,6 +77,9 @@ def load_pack(path: Path | None = None) -> PatternPack:
     compiled_patterns: PatternPack = []
     for raw_pattern in raw_patterns:
         compiled_pattern = _compile_pattern(raw_pattern)
-        if compiled_pattern.enabled:
+        enabled_value = raw_pattern.get("enabled", True)
+        if not isinstance(enabled_value, bool):
+            raise ValueError(f"pattern '{compiled_pattern.id}' field 'enabled' must be a bool")
+        if enabled_value:
             compiled_patterns.append(compiled_pattern)
     return compiled_patterns
