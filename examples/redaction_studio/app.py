@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .document_parser import detect_format, parse
@@ -130,3 +130,31 @@ def redact_batch_endpoint(payload: RedactBatchRequest) -> dict[str, Any]:
         STORE.set_redacted_page(payload.docId, page)
         pages_out.append(_serialize_page(page))
     return {"redactedCount": len(pages_out), "pages": pages_out}
+
+
+from .document_writer import write as _write_doc
+
+
+@app.get("/api/download/{doc_id}")
+def download(doc_id: str) -> Response:
+    try:
+        doc = STORE.get(doc_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown doc_id") from exc
+    body, media_type = _write_doc(doc, doc.redacted_pages)
+    out_name = f"{Path(doc.filename).stem}.redacted.{doc.fmt}"
+    return Response(
+        content=body,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{out_name}"'},
+    )
+
+
+@app.delete("/api/documents/{doc_id}", status_code=204)
+def delete_document(doc_id: str) -> Response:
+    try:
+        STORE.get(doc_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown doc_id") from exc
+    STORE.delete(doc_id)
+    return Response(status_code=204)

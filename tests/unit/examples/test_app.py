@@ -141,3 +141,41 @@ def test_redact_batch_endpoint_redacts_every_page(client, monkeypatch):
     assert body["redactedCount"] == 3
     assert sorted(p["index"] for p in body["pages"]) == [0, 1, 2]
     assert all(p["redacted"] == "[REDACTED:hash]" for p in body["pages"])
+
+
+def test_download_returns_redacted_docx(client, monkeypatch):
+    monkeypatch.setattr(redactor_module, "_deidentify", _patched_deid)
+    raw = _make_docx([["alpha"], ["beta"]])
+    doc_id = client.post(
+        "/api/upload",
+        files={"file": ("a.docx", raw, "application/octet-stream")},
+    ).json()["docId"]
+    client.post("/api/redact/batch", json={"docId": doc_id, "method": "mask"})
+
+    resp = client.get(f"/api/download/{doc_id}")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    import docx as _docx
+    parsed = _docx.Document(io.BytesIO(resp.content))
+    text = "\n".join(p.text for p in parsed.paragraphs)
+    assert "[REDACTED:mask]" in text
+
+
+def test_download_404_when_unknown(client):
+    resp = client.get("/api/download/missing")
+    assert resp.status_code == 404
+
+
+def test_delete_removes_doc(client, monkeypatch):
+    monkeypatch.setattr(redactor_module, "_deidentify", _patched_deid)
+    raw = _make_docx([["x"]])
+    doc_id = client.post(
+        "/api/upload",
+        files={"file": ("a.docx", raw, "application/octet-stream")},
+    ).json()["docId"]
+
+    resp = client.delete(f"/api/documents/{doc_id}")
+    assert resp.status_code == 204
+    assert client.get(f"/api/documents/{doc_id}").status_code == 404
