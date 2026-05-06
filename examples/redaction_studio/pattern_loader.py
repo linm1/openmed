@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import re
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 DEFAULT_PACK_PATH = Path(__file__).resolve().parent / "patterns" / "clinical_trial.toml"
 

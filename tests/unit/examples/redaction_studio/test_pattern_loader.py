@@ -1,4 +1,8 @@
+import builtins
+import importlib.util
 import re
+import sys
+import types
 from pathlib import Path
 
 from examples.redaction_studio.pattern_loader import (
@@ -54,3 +58,38 @@ enabled = true
     assert pack[0].id == "foo"
     assert pack[0].label == "FOO"
     assert pack[0].regex.search("foo bar") is not None
+
+
+def test_pattern_loader_uses_tomli_fallback(monkeypatch):
+    module_path = (
+        Path(__file__).resolve().parents[4]
+        / "examples"
+        / "redaction_studio"
+        / "pattern_loader.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "pattern_loader_tomli_fallback",
+        module_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+
+    module = importlib.util.module_from_spec(spec)
+    fake_tomli = types.ModuleType("tomli")
+    fake_tomli.load = lambda handle: {"patterns": []}
+    real_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "tomllib":
+            raise ModuleNotFoundError("No module named 'tomllib'")
+        if name == "tomli":
+            return fake_tomli
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.delitem(sys.modules, "tomllib", raising=False)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+
+    spec.loader.exec_module(module)
+
+    assert module.tomllib is fake_tomli
