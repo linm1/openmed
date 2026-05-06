@@ -385,6 +385,22 @@ def test_propagate_finds_unlabelled_occurrence():
     ]
     assert all(entity.label == "ORG" for entity in new_entities)
     assert all(entity.source == "propagate" for entity in new_entities)
+    assert all(entity.score == pytest.approx(0.95) for entity in new_entities)
+
+
+def test_propagate_skips_embedded_word_matches():
+    doc = _make_doc([
+        "Ann signed the form.",
+        "Annual review is scheduled.",
+    ])
+    canon = {
+        "ann": CanonicalEntity(token="[PERSON_1]", label="PERSON", occurrences=1)
+    }
+    existing_entities = [_make_raw_entity("PERSON", "Ann", page=0, start=0, score=0.82)]
+
+    new_entities = pipeline._propagate(doc, canon, existing_entities)
+
+    assert new_entities == []
 
 
 def test_propagate_skips_shorter_match_inside_existing_longer_span():

@@ -224,7 +224,8 @@ def _propagation_patterns(
         parts = [re.escape(part) for part in norm_text.split(" ") if part]
         if not parts:
             continue
-        patterns.append((re.compile(r"\s+".join(parts), re.IGNORECASE), canonical))
+        pattern_text = rf"(?<!\w){r'\s+'.join(parts)}(?!\w)"
+        patterns.append((re.compile(pattern_text, re.IGNORECASE), canonical))
 
     return patterns
 
@@ -234,13 +235,29 @@ def _propagate(
     canon: dict[str, CanonicalEntity],
     existing_entities: list[RawEntity] | None = None,
 ) -> list[RawEntity]:
-    return _propagate_matches(doc, _propagation_patterns(canon), existing_entities)
+    score_by_token: dict[str, float] = {}
+    earliest_source_by_token: dict[str, tuple[int, int, int]] = {}
+    for entity in existing_entities or []:
+        canonical = _lookup_canonical(canon, _norm(entity.surface_text), entity.label)
+        if canonical is None:
+            continue
+
+        span = (entity.page, entity.start, entity.end)
+        earliest_span = earliest_source_by_token.get(canonical.token)
+        if earliest_span is not None and earliest_span <= span:
+            continue
+
+        earliest_source_by_token[canonical.token] = span
+        score_by_token[canonical.token] = entity.score
+
+    return _propagate_matches(doc, _propagation_patterns(canon), existing_entities, score_by_token)
 
 
 def _propagate_matches(
     doc: UploadedDoc,
     patterns: list[tuple[re.Pattern[str], CanonicalEntity]],
     existing_entities: list[RawEntity] | None = None,
+    score_by_token: dict[str, float] | None = None,
 ) -> list[RawEntity]:
     propagated: list[RawEntity] = []
     existing_spans = {
@@ -281,7 +298,7 @@ def _propagate_matches(
                     surface_text=surface_text,
                     label=canonical.label,
                     source="propagate",
-                    score=1.0,
+                    score=(score_by_token or {}).get(canonical.token, 1.0),
                 )
             )
             blocked_ranges.append((start, end))
