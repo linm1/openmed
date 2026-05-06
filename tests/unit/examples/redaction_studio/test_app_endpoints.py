@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -39,14 +40,39 @@ def client() -> TestClient:
     return TestClient(app)
 
 
-def test_get_patterns_returns_list(client: TestClient):
+def test_get_patterns_returns_list(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    trial_code_regex = re.compile(r"\b" + ("[A-Z]" * 40) + r"\b")
+    study_id_regex = re.compile(r"\bNCT\d{8}\b")
+    monkeypatch_pack = [
+        SimpleNamespace(id="trial_code", label="TRIAL_CODE", regex=trial_code_regex),
+        SimpleNamespace(id="study_id", label="STUDY_ID", regex=study_id_regex),
+    ]
+    monkeypatch.setattr(app_module, "_pack", monkeypatch_pack, raising=False)
+    monkeypatch.setattr(
+        app_module,
+        "_pattern_enabled_by_default",
+        {"trial_code": False, "study_id": True},
+        raising=False,
+    )
+
     response = client.get("/api/patterns")
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert isinstance(body, list)
-    assert body
-    assert {"id", "label"}.issubset(body[0])
+    assert body == [
+        {
+            "id": "trial_code",
+            "label": "TRIAL_CODE",
+            "regex_preview": f"{trial_code_regex.pattern[:117]}...",
+            "enabled_by_default": False,
+        },
+        {
+            "id": "study_id",
+            "label": "STUDY_ID",
+            "regex_preview": study_id_regex.pattern,
+            "enabled_by_default": True,
+        },
+    ]
 
 
 def test_patch_context_updates_confidence(client: TestClient):
@@ -135,3 +161,47 @@ def test_redact_page_uses_pipeline(client: TestClient, monkeypatch: pytest.Monke
     assert body["redactedText"] == "Patient [NAME_1] joined trial [TRIAL_ID_1]."
     assert body["canonical"]["jane doe"]["token"] == "[NAME_1]"
     run_mock.assert_called_once_with(doc, app_module._pack, doc.context)
+
+
+def test_legacy_redact_routes_ignore_method_field(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    doc = _make_doc()
+    app_module.STORE.put(doc)
+    run_mock = MagicMock(
+        return_value=(
+            [
+                RedactedPage(
+                    index=0,
+                    original=doc.pages[0].text,
+                    redacted="Patient [NAME_1] joined trial [TRIAL_ID_1].",
+                    entities=(),
+                ),
+                RedactedPage(
+                    index=1,
+                    original=doc.pages[1].text,
+                    redacted="Follow up with [NAME_1] next week.",
+                    entities=(),
+                ),
+            ],
+            {"jane doe": {"token": "[NAME_1]", "label": "NAME", "occurrences": 2}},
+        )
+    )
+    monkeypatch.setattr(app_module, "pipeline", SimpleNamespace(run=run_mock), raising=False)
+    monkeypatch.setattr(app_module, "_pack", [SimpleNamespace(id="demo", label="Demo")], raising=False)
+
+    page_response = client.post(
+        "/api/redact/page",
+        json={"docId": doc.doc_id, "pageIndex": 0, "method": "remove"},
+    )
+    batch_response = client.post(
+        "/api/redact/batch",
+        json={"docId": doc.doc_id, "method": "hash"},
+    )
+
+    assert page_response.status_code == 200, page_response.text
+    assert page_response.json()["page"]["redacted"] == "Patient [NAME_1] joined trial [TRIAL_ID_1]."
+    assert batch_response.status_code == 200, batch_response.text
+    assert batch_response.json()["redactedCount"] == 2
+    assert run_mock.call_count == 2

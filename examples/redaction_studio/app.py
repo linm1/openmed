@@ -6,16 +6,21 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import pipeline
 from .document_parser import detect_format, parse
 from .document_writer import write as _write_doc
-from .pattern_loader import load_pack
+from .pattern_loader import DEFAULT_PACK_PATH, load_pack
 from .store import DocStore
 from .types import UploadedDoc
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
@@ -23,6 +28,29 @@ STATIC_DIR = ROOT / "static"
 store = DocStore()
 STORE = store
 _pack = load_pack()
+MAX_PATTERN_PREVIEW_CHARS = 120
+
+
+def _load_pattern_enabled_by_default(path: Path = DEFAULT_PACK_PATH) -> dict[str, bool]:
+    with path.open("rb") as handle:
+        pack_data = tomllib.load(handle)
+
+    raw_patterns = pack_data.get("patterns", [])
+    if not isinstance(raw_patterns, list):
+        return {}
+
+    enabled_by_default: dict[str, bool] = {}
+    for raw_pattern in raw_patterns:
+        if not isinstance(raw_pattern, dict):
+            continue
+        pattern_id = raw_pattern.get("id")
+        if isinstance(pattern_id, str) and pattern_id.strip():
+            enabled_value = raw_pattern.get("enabled", True)
+            enabled_by_default[pattern_id.strip()] = enabled_value if isinstance(enabled_value, bool) else True
+    return enabled_by_default
+
+
+_pattern_enabled_by_default = _load_pattern_enabled_by_default()
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
 
 app = FastAPI(
@@ -53,15 +81,26 @@ def _serialize_context(context) -> dict[str, Any]:
     }
 
 
-def _serialize_pattern(pattern) -> dict[str, Any]:
+class PatternResponse(BaseModel):
+    id: str
+    label: str
+    regex_preview: str
+    enabled_by_default: bool
+
+
+def _serialize_pattern(pattern) -> PatternResponse:
     regex_text = pattern.regex.pattern
-    regex_preview = regex_text if len(regex_text) <= 120 else f"{regex_text[:117]}..."
-    return {
-        "id": pattern.id,
-        "label": pattern.label,
-        "regex_preview": regex_preview,
-        "enabled_by_default": True,
-    }
+    regex_preview = (
+        regex_text
+        if len(regex_text) <= MAX_PATTERN_PREVIEW_CHARS
+        else f"{regex_text[:MAX_PATTERN_PREVIEW_CHARS - 3]}..."
+    )
+    return PatternResponse(
+        id=pattern.id,
+        label=pattern.label,
+        regex_preview=regex_preview,
+        enabled_by_default=_pattern_enabled_by_default.get(pattern.id, True),
+    )
 
 
 def _run_pipeline(doc: UploadedDoc) -> tuple[list[Any], dict[str, dict]]:
@@ -96,8 +135,8 @@ async def upload(file: UploadFile = File(...)) -> dict[str, Any]:
     return {"docId": doc.doc_id, "filename": doc.filename, "pageCount": len(pages), "fmt": fmt}
 
 
-@app.get("/api/patterns")
-def list_patterns() -> list[dict[str, Any]]:
+@app.get("/api/patterns", response_model=list[PatternResponse])
+def list_patterns() -> list[PatternResponse]:
     return [_serialize_pattern(pattern) for pattern in _pack]
 
 
@@ -115,15 +154,17 @@ def list_pages(doc_id: str) -> dict[str, Any]:
     }
 
 
-class RedactPageRequest(BaseModel):
+class LegacyCompatibleRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+
+class RedactPageRequest(LegacyCompatibleRequest):
     docId: str
     pageIndex: int = Field(ge=0)
-    method: str = "mask"
 
 
-class RedactBatchRequest(BaseModel):
+class RedactBatchRequest(LegacyCompatibleRequest):
     docId: str
-    method: str = "mask"
 
 
 class UpdateContextRequest(BaseModel):
