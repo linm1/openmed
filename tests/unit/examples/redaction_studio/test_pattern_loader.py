@@ -92,6 +92,24 @@ enabled = true
     assert pack[0].regex.search("foo bar") is not None
 
 
+def test_load_pack_trims_identifier_style_fields(tmp_path):
+    pack_path = _write_pack(
+        tmp_path,
+        '''
+[[patterns]]
+id = "  foo  "
+label = "  FOO  "
+regex = "\\\\bfoo\\\\b"
+enabled = true
+''',
+    )
+
+    pack = load_pack(pack_path)
+
+    assert [pattern.id for pattern in pack] == ["foo"]
+    assert [pattern.label for pattern in pack] == ["FOO"]
+
+
 def test_load_pack_rejects_whitespace_only_required_string_fields(tmp_path):
     pack_path = _write_pack(
         tmp_path,
@@ -105,6 +123,26 @@ enabled = true
     )
 
     with pytest.raises(ValueError, match="pattern field 'id' must be a non-empty string"):
+        load_pack(pack_path)
+
+
+@pytest.mark.parametrize("field_name", ["id", "label", "regex"])
+def test_load_pack_rejects_missing_required_string_fields(tmp_path, field_name):
+    pattern_lines = [
+        'id = "foo"',
+        'label = "FOO"',
+        'regex = "\\\\bfoo\\\\b"',
+        "enabled = true",
+    ]
+    pattern_lines = [
+        line for line in pattern_lines if not line.startswith(f"{field_name} =")
+    ]
+    pack_path = _write_pack(tmp_path, "[[patterns]]\n" + "\n".join(pattern_lines))
+
+    with pytest.raises(
+        ValueError,
+        match=rf"pattern field '{field_name}' must be a non-empty string",
+    ):
         load_pack(pack_path)
 
 
@@ -198,12 +236,7 @@ enabled = "true"
 
 
 def test_pattern_loader_uses_tomli_fallback(monkeypatch, tmp_path):
-    module_path = (
-        Path(__file__).resolve().parents[4]
-        / "examples"
-        / "redaction_studio"
-        / "pattern_loader.py"
-    )
+    module_path = DEFAULT_PACK_PATH.parent.parent / "pattern_loader.py"
     spec = importlib.util.spec_from_file_location(
         "pattern_loader_tomli_fallback",
         module_path,

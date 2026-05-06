@@ -23,10 +23,10 @@ class CompiledPattern:
 PatternPack = list[CompiledPattern]
 
 
-def _require_string(value: object, *, field_name: str) -> str:
+def _require_string(value: object, *, field_name: str, normalize: bool = False) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"pattern field '{field_name}' must be a non-empty string")
-    return value
+    return value.strip() if normalize else value
 
 
 def _compile_regex(value: object, *, field_name: str, pattern_id: str) -> re.Pattern[str]:
@@ -39,12 +39,24 @@ def _compile_regex(value: object, *, field_name: str, pattern_id: str) -> re.Pat
         ) from exc
 
 
-def _compile_pattern(raw_pattern: object) -> CompiledPattern:
+def _compile_pattern(raw_pattern: object) -> CompiledPattern | None:
     if not isinstance(raw_pattern, dict):
         raise ValueError("each pattern entry must be a TOML table")
 
-    pattern_id = _require_string(raw_pattern.get("id"), field_name="id")
-    label = _require_string(raw_pattern.get("label"), field_name="label")
+    enabled_value = raw_pattern.get("enabled", True)
+    if not isinstance(enabled_value, bool):
+        pattern_id_value = raw_pattern.get("id")
+        pattern_id = (
+            pattern_id_value.strip()
+            if isinstance(pattern_id_value, str) and pattern_id_value.strip()
+            else "<unknown>"
+        )
+        raise ValueError(f"pattern '{pattern_id}' field 'enabled' must be a bool")
+    if not enabled_value:
+        return None
+
+    pattern_id = _require_string(raw_pattern.get("id"), field_name="id", normalize=True)
+    label = _require_string(raw_pattern.get("label"), field_name="label", normalize=True)
 
     post_validate_value = raw_pattern.get("post_validate")
     post_validate = (
@@ -76,20 +88,7 @@ def load_pack(path: Path | None = None) -> PatternPack:
 
     compiled_patterns: PatternPack = []
     for raw_pattern in raw_patterns:
-        if not isinstance(raw_pattern, dict):
-            raise ValueError("each pattern entry must be a TOML table")
-
-        enabled_value = raw_pattern.get("enabled", True)
-        if not isinstance(enabled_value, bool):
-            pattern_id_value = raw_pattern.get("id")
-            pattern_id = (
-                pattern_id_value.strip()
-                if isinstance(pattern_id_value, str) and pattern_id_value.strip()
-                else "<unknown>"
-            )
-            raise ValueError(f"pattern '{pattern_id}' field 'enabled' must be a bool")
-        if not enabled_value:
-            continue
-
-        compiled_patterns.append(_compile_pattern(raw_pattern))
+        compiled_pattern = _compile_pattern(raw_pattern)
+        if compiled_pattern is not None:
+            compiled_patterns.append(compiled_pattern)
     return compiled_patterns
