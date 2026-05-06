@@ -38,6 +38,23 @@ class DocStore:
             doc = self.get(doc_id)
             doc.redacted_pages[page.index] = page
 
+    def replace_pipeline_output(
+        self,
+        doc_id: str,
+        *,
+        pages: list[RedactedPage],
+        summary: dict[str, dict],
+    ) -> UploadedDoc:
+        next_redacted_pages = {page.index: page for page in pages}
+        next_canonical_summary = {
+            key: dict(value) for key, value in summary.items()
+        }
+        with self._lock:
+            doc = self.get(doc_id)
+            doc.redacted_pages = next_redacted_pages
+            doc.canonical_summary = next_canonical_summary
+            return doc
+
     def update_context(
         self,
         doc_id: str,

@@ -27,31 +27,60 @@ STATIC_DIR = ROOT / "static"
 
 store = DocStore()
 STORE = store
-_pack = load_pack()
 MAX_PATTERN_PREVIEW_CHARS = 120
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
 
 
-def _load_pattern_enabled_by_default(path: Path = DEFAULT_PACK_PATH) -> dict[str, bool]:
+class PatternResponse(BaseModel):
+    id: str
+    label: str
+    regex_preview: str
+    enabled_by_default: bool
+
+
+def _build_regex_preview(regex_text: str) -> str:
+    return (
+        regex_text
+        if len(regex_text) <= MAX_PATTERN_PREVIEW_CHARS
+        else f"{regex_text[:MAX_PATTERN_PREVIEW_CHARS - 3]}..."
+    )
+
+
+def _load_pattern_catalog(path: Path = DEFAULT_PACK_PATH) -> list[PatternResponse]:
     with path.open("rb") as handle:
         pack_data = tomllib.load(handle)
 
     raw_patterns = pack_data.get("patterns", [])
     if not isinstance(raw_patterns, list):
-        return {}
+        return []
 
-    enabled_by_default: dict[str, bool] = {}
+    pattern_catalog: list[PatternResponse] = []
     for raw_pattern in raw_patterns:
         if not isinstance(raw_pattern, dict):
             continue
         pattern_id = raw_pattern.get("id")
-        if isinstance(pattern_id, str) and pattern_id.strip():
-            enabled_value = raw_pattern.get("enabled", True)
-            enabled_by_default[pattern_id.strip()] = enabled_value if isinstance(enabled_value, bool) else True
-    return enabled_by_default
+        label = raw_pattern.get("label")
+        regex_text = raw_pattern.get("regex")
+        if not isinstance(pattern_id, str) or not pattern_id.strip():
+            continue
+        if not isinstance(label, str) or not label.strip():
+            continue
+        if not isinstance(regex_text, str) or not regex_text.strip():
+            continue
+        enabled_value = raw_pattern.get("enabled", True)
+        pattern_catalog.append(
+            PatternResponse(
+                id=pattern_id.strip(),
+                label=label.strip(),
+                regex_preview=_build_regex_preview(regex_text.strip()),
+                enabled_by_default=(enabled_value if isinstance(enabled_value, bool) else True),
+            )
+        )
+    return pattern_catalog
 
 
-_pattern_enabled_by_default = _load_pattern_enabled_by_default()
-MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
+_pack = load_pack()
+_pattern_catalog = _load_pattern_catalog()
 
 app = FastAPI(
     title="OpenMed Redaction Studio",
@@ -88,29 +117,9 @@ class PatternResponse(BaseModel):
     enabled_by_default: bool
 
 
-def _serialize_pattern(pattern) -> PatternResponse:
-    regex_text = pattern.regex.pattern
-    regex_preview = (
-        regex_text
-        if len(regex_text) <= MAX_PATTERN_PREVIEW_CHARS
-        else f"{regex_text[:MAX_PATTERN_PREVIEW_CHARS - 3]}..."
-    )
-    return PatternResponse(
-        id=pattern.id,
-        label=pattern.label,
-        regex_preview=regex_preview,
-        enabled_by_default=_pattern_enabled_by_default.get(pattern.id, True),
-    )
-
-
-def _run_pipeline(doc: UploadedDoc) -> tuple[list[Any], dict[str, dict]]:
+def _run_pipeline(doc: UploadedDoc) -> UploadedDoc:
     pages, summary = pipeline.run(doc, _pack, doc.context)
-    doc.redacted_pages.clear()
-    for page in pages:
-        doc.redacted_pages[page.index] = page
-    doc.canonical_summary.clear()
-    doc.canonical_summary.update(summary)
-    return pages, doc.canonical_summary
+    return store.replace_pipeline_output(doc.doc_id, pages=pages, summary=summary)
 
 
 @app.post("/api/upload")
@@ -137,7 +146,7 @@ async def upload(file: UploadFile = File(...)) -> dict[str, Any]:
 
 @app.get("/api/patterns", response_model=list[PatternResponse])
 def list_patterns() -> list[PatternResponse]:
-    return [_serialize_pattern(pattern) for pattern in _pack]
+    return list(_pattern_catalog)
 
 
 @app.get("/api/documents/{doc_id}")
@@ -186,6 +195,20 @@ def _serialize_page(page) -> dict[str, Any]:
     }
 
 
+def _uploaded_filename_stem(filename: str) -> str:
+    leaf_name = filename.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
+    stem, has_suffix, _suffix = leaf_name.rpartition(".")
+    return stem if has_suffix else leaf_name
+
+
+def _sanitize_download_filename_stem(filename: str) -> str:
+    safe_stem = _uploaded_filename_stem(filename)
+    for unsafe_char in ('"', "\\", "\r", "\n"):
+        safe_stem = safe_stem.replace(unsafe_char, "_")
+    safe_stem = safe_stem.strip(" .")
+    return safe_stem or "document"
+
+
 @app.patch("/api/documents/{doc_id}/context")
 def update_context(doc_id: str, payload: UpdateContextRequest) -> dict[str, Any]:
     try:
@@ -205,7 +228,7 @@ def redact_document_page(doc_id: str, payload: DocumentRedactPageRequest) -> dic
     doc = _get_doc_or_404(doc_id)
     if payload.page >= len(doc.pages):
         raise HTTPException(status_code=400, detail="page out of range")
-    _run_pipeline(doc)
+    doc = _run_pipeline(doc)
     page = doc.redacted_pages[payload.page]
     return {
         "pageNumber": page.index,
@@ -219,7 +242,7 @@ def redact_page_endpoint(payload: RedactPageRequest) -> dict[str, Any]:
     doc = _get_doc_or_404(payload.docId)
     if payload.pageIndex >= len(doc.pages):
         raise HTTPException(status_code=400, detail="pageIndex out of range")
-    _run_pipeline(doc)
+    doc = _run_pipeline(doc)
     page = doc.redacted_pages[payload.pageIndex]
     return {"page": _serialize_page(page)}
 
@@ -227,7 +250,7 @@ def redact_page_endpoint(payload: RedactPageRequest) -> dict[str, Any]:
 @app.post("/api/redact/batch")
 def redact_batch_endpoint(payload: RedactBatchRequest) -> dict[str, Any]:
     doc = _get_doc_or_404(payload.docId)
-    _run_pipeline(doc)
+    doc = _run_pipeline(doc)
     pages_out = [_serialize_page(doc.redacted_pages[slice_.index]) for slice_ in doc.pages]
     return {"redactedCount": len(pages_out), "pages": pages_out}
 
@@ -236,7 +259,7 @@ def redact_batch_endpoint(payload: RedactBatchRequest) -> dict[str, Any]:
 def download(doc_id: str) -> Response:
     doc = _get_doc_or_404(doc_id)
     body, media_type = _write_doc(doc, doc.redacted_pages)
-    out_name = f"{Path(doc.filename).stem}.redacted.{doc.fmt}"
+    out_name = f"{_sanitize_download_filename_stem(doc.filename)}.redacted.{doc.fmt}"
     return Response(
         content=body,
         media_type=media_type,

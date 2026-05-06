@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import re
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -40,39 +39,46 @@ def client() -> TestClient:
     return TestClient(app)
 
 
-def test_get_patterns_returns_list(client: TestClient, monkeypatch: pytest.MonkeyPatch):
-    trial_code_regex = re.compile(r"\b" + ("[A-Z]" * 40) + r"\b")
-    study_id_regex = re.compile(r"\bNCT\d{8}\b")
-    monkeypatch_pack = [
-        SimpleNamespace(id="trial_code", label="TRIAL_CODE", regex=trial_code_regex),
-        SimpleNamespace(id="study_id", label="STUDY_ID", regex=study_id_regex),
-    ]
-    monkeypatch.setattr(app_module, "_pack", monkeypatch_pack, raising=False)
-    monkeypatch.setattr(
-        app_module,
-        "_pattern_enabled_by_default",
-        {"trial_code": False, "study_id": True},
-        raising=False,
-    )
-
+def test_get_patterns_includes_disabled_default_pattern(client: TestClient):
     response = client.get("/api/patterns")
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body == [
-        {
-            "id": "trial_code",
-            "label": "TRIAL_CODE",
-            "regex_preview": f"{trial_code_regex.pattern[:117]}...",
-            "enabled_by_default": False,
-        },
-        {
-            "id": "study_id",
-            "label": "STUDY_ID",
-            "regex_preview": study_id_regex.pattern,
-            "enabled_by_default": True,
-        },
-    ]
+    assert body
+    assert all("regex_preview" in pattern for pattern in body)
+    assert all("enabled_by_default" in pattern for pattern in body)
+
+    version_pattern = next(
+        pattern for pattern in body if pattern["id"] == "version_string"
+    )
+    assert version_pattern == {
+        "id": "version_string",
+        "label": "VERSION",
+        "regex_preview": r"\b(?:Version\s*)?\d+(?:\.\d+){1,3}\b",
+        "enabled_by_default": False,
+    }
+
+
+def test_download_sanitizes_content_disposition_filename(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    doc = _make_doc(doc_id="doc-download")
+    doc.filename = 'evil\\danger"\r\nname.pdf'
+    app_module.STORE.put(doc)
+    monkeypatch.setattr(
+        app_module,
+        "_write_doc",
+        lambda current_doc, redacted_pages: (b"redacted", "application/pdf"),
+        raising=False,
+    )
+
+    response = client.get(f"/api/download/{doc.doc_id}")
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-disposition"] == (
+        'attachment; filename="danger___name.redacted.pdf"'
+    )
 
 
 def test_patch_context_updates_confidence(client: TestClient):
