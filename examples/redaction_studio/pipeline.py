@@ -19,6 +19,8 @@ _LABEL_VALIDATORS: dict[str, re.Pattern[str]] = {
     "zip_code": re.compile(r"^\d{5}(?:-\d{4})?$")
 }
 
+_CANONICAL_LABEL_SEPARATOR = "||"
+
 
 def _result_entities(result: object) -> object:
     entities = getattr(result, "pii_entities", None)
@@ -133,6 +135,31 @@ def _norm(text: str) -> str:
     return " ".join(text.split()).lower()
 
 
+def _canonical_key(norm_text: str, label: str) -> str:
+    return f"{norm_text}{_CANONICAL_LABEL_SEPARATOR}{label}"
+
+
+def _canonical_norm(canonical_key: str) -> str:
+    norm_text, _, _ = canonical_key.partition(_CANONICAL_LABEL_SEPARATOR)
+    return norm_text
+
+
+def _lookup_canonical(
+    canon: dict[str, CanonicalEntity],
+    norm_text: str,
+    label: str,
+) -> CanonicalEntity | None:
+    canonical = canon.get(_canonical_key(norm_text, label))
+    if canonical is not None:
+        return canonical
+
+    canonical = canon.get(norm_text)
+    if canonical is not None and canonical.label == label:
+        return canonical
+
+    return None
+
+
 def _build_canonical(entities: list[RawEntity]) -> dict[str, CanonicalEntity]:
     grouped: dict[tuple[str, str], dict[str, int | str]] = {}
     for entity in entities:
@@ -156,6 +183,10 @@ def _build_canonical(entities: list[RawEntity]) -> dict[str, CanonicalEntity]:
         first_seen["occurrences"] = int(first_seen["occurrences"]) + 1
 
     label_counters: dict[str, int] = {}
+    norm_counts: dict[str, int] = {}
+    for _, norm_text in grouped:
+        norm_counts[norm_text] = norm_counts.get(norm_text, 0) + 1
+
     canon: dict[str, CanonicalEntity] = {}
     ordered_groups = sorted(
         grouped.values(),
@@ -165,29 +196,64 @@ def _build_canonical(entities: list[RawEntity]) -> dict[str, CanonicalEntity]:
         label = str(group["label"])
         label_counters[label] = label_counters.get(label, 0) + 1
         norm = str(group["norm"])
-        canon.setdefault(
-            norm,
-            CanonicalEntity(
-                token=f"[{label}_{label_counters[label]}]",
-                label=label,
-                occurrences=int(group["occurrences"]),
-            ),
+        canonical_key = norm
+        if norm_counts[norm] > 1:
+            canonical_key = _canonical_key(norm, label)
+
+        canon[canonical_key] = CanonicalEntity(
+            token=f"[{label}_{label_counters[label]}]",
+            label=label,
+            occurrences=int(group["occurrences"]),
         )
     return canon
 
 
-def _propagate(doc: UploadedDoc, canon: dict[str, CanonicalEntity]) -> list[RawEntity]:
-    propagated: list[RawEntity] = []
-    patterns = []
-    for norm_text, canonical in canon.items():
+def _propagation_patterns(
+    canon: dict[str, CanonicalEntity],
+) -> list[tuple[re.Pattern[str], CanonicalEntity]]:
+    patterns: list[tuple[re.Pattern[str], CanonicalEntity]] = []
+    canonical_groups: dict[str, list[CanonicalEntity]] = {}
+    for canonical_key, canonical in canon.items():
+        canonical_groups.setdefault(_canonical_norm(canonical_key), []).append(canonical)
+
+    for norm_text, canonical_group in canonical_groups.items():
+        if len(canonical_group) != 1:
+            continue
+
+        canonical = canonical_group[0]
         parts = [re.escape(part) for part in norm_text.split(" ") if part]
         if not parts:
             continue
         patterns.append((re.compile(r"\s+".join(parts), re.IGNORECASE), canonical))
 
+    return patterns
+
+
+def _propagate(
+    doc: UploadedDoc,
+    canon: dict[str, CanonicalEntity],
+    existing_entities: list[RawEntity] | None = None,
+) -> list[RawEntity]:
+    return _propagate_matches(doc, _propagation_patterns(canon), existing_entities)
+
+
+def _propagate_matches(
+    doc: UploadedDoc,
+    patterns: list[tuple[re.Pattern[str], CanonicalEntity]],
+    existing_entities: list[RawEntity] | None = None,
+) -> list[RawEntity]:
+    propagated: list[RawEntity] = []
+    existing_spans = {
+        (entity.page, entity.start, entity.end, entity.label)
+        for entity in (existing_entities or [])
+    }
+
     for page in doc.pages:
         for pattern, canonical in patterns:
             for match in pattern.finditer(page.text):
+                span_key = (page.page_number, match.start(), match.end(), canonical.label)
+                if span_key in existing_spans:
+                    continue
                 propagated.append(
                     RawEntity(
                         page=page.page_number,
@@ -199,6 +265,7 @@ def _propagate(doc: UploadedDoc, canon: dict[str, CanonicalEntity]) -> list[RawE
                         score=1.0,
                     )
                 )
+                existing_spans.add(span_key)
     return propagated
 
 
@@ -246,9 +313,9 @@ def _render(
         redacted_text = page.text
         entity_payload: list[dict] = []
         for entity in current_entities:
-            canonical = canon.get(_norm(entity.surface_text))
             token = f"[{entity.label}]"
-            if canonical is not None and canonical.label == entity.label:
+            canonical = _lookup_canonical(canon, _norm(entity.surface_text), entity.label)
+            if canonical is not None:
                 token = canonical.token
             entity_payload.append(
                 {
@@ -263,9 +330,9 @@ def _render(
             )
 
         for entity in sorted(current_entities, key=lambda item: (item.start, item.end), reverse=True):
-            canonical = canon.get(_norm(entity.surface_text))
             token = f"[{entity.label}]"
-            if canonical is not None and canonical.label == entity.label:
+            canonical = _lookup_canonical(canon, _norm(entity.surface_text), entity.label)
+            if canonical is not None:
                 token = canonical.token
             redacted_text = redacted_text[:entity.start] + token + redacted_text[entity.end:]
 
@@ -299,7 +366,7 @@ def run(
     raw = _post_validate_ner(_ner_pass(doc, ctx))
     raw += _regex_pass(doc, pack, ctx) + _user_term_pass(doc, ctx)
     canon = _build_canonical(raw)
-    raw = raw + _propagate(doc, canon)
+    raw = raw + _propagate(doc, canon, raw)
     canon = _build_canonical(raw)
     raw = _resolve_overlaps(raw)
     pages = _render(doc, raw, canon)

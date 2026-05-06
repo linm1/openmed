@@ -347,30 +347,43 @@ def test_build_canonical_assigns_stable_tokens():
 
 def test_build_canonical_groups_by_label():
     entities = [
-        _make_raw_entity("STUDY_ID", "NCT12345678", page=0, start=0),
-        _make_raw_entity("ORG", "Acme Inc.", page=0, start=25),
+        _make_raw_entity("ORG", "Acme Inc.", page=0, start=0),
+        _make_raw_entity("PERSON", "Acme Inc.", page=0, start=25),
     ]
 
     canon = pipeline._build_canonical(entities)
 
-    assert canon["nct12345678"].token == "[STUDY_ID_1]"
-    assert canon["acme inc."].token == "[ORG_1]"
+    assert "acme inc." not in canon
+    assert canon["acme inc.||ORG"] == CanonicalEntity(
+        token="[ORG_1]",
+        label="ORG",
+        occurrences=1,
+    )
+    assert canon["acme inc.||PERSON"] == CanonicalEntity(
+        token="[PERSON_1]",
+        label="PERSON",
+        occurrences=1,
+    )
 
 
 def test_propagate_finds_unlabelled_occurrence():
     doc = _make_doc([
-        "Acme Inc. sponsored the study.",
-        "Later, Acme Inc. appeared again.",
+        "ACME Inc. sponsored the study.",
+        "Later, acme inc. appeared again.",
+        "AcMe InC. closed the site.",
     ])
     canon = {
         "acme inc.": CanonicalEntity(token="[ORG_1]", label="ORG", occurrences=1)
     }
+    existing_entities = [_make_raw_entity("ORG", "ACME Inc.", page=0, start=0)]
 
-    new_entities = pipeline._propagate(doc, canon)
+    new_entities = pipeline._propagate(doc, canon, existing_entities)
 
-    pages_hit = {entity.page for entity in new_entities}
-    assert 1 in pages_hit
-    assert new_entities
+    assert [(entity.page, entity.surface_text) for entity in new_entities] == [
+        (1, "acme inc."),
+        (2, "AcMe InC."),
+    ]
+    assert all(entity.label == "ORG" for entity in new_entities)
     assert all(entity.source == "propagate" for entity in new_entities)
 
 
@@ -386,15 +399,51 @@ def test_resolve_overlaps_keeps_longest():
 
 
 def test_run_returns_redacted_pages_and_summary(monkeypatch):
-    doc = _make_doc(["NCT12345678 sponsored by Acme Inc."])
+    doc = _make_doc([
+        "NCT12345678 sponsored by Acme Inc.",
+        "Later ACME INC. appeared again.",
+    ])
     ctx = RedactionContext()
     pack = load_pack()
 
-    monkeypatch.setattr(pipeline, "_deidentify", MagicMock(return_value=SimpleNamespace(pii_entities=[])))
+    monkeypatch.setattr(
+        pipeline,
+        "_deidentify",
+        MagicMock(
+            side_effect=[
+                _make_deidentify_result(
+                    doc.pages[0].text,
+                    [
+                        PIIEntity(
+                            text="Acme Inc.",
+                            label="ORG",
+                            confidence=0.95,
+                            start=25,
+                            end=34,
+                        )
+                    ],
+                ),
+                _make_deidentify_result(doc.pages[1].text, []),
+            ]
+        ),
+    )
 
     pages, summary = pipeline.run(doc, pack, ctx)
 
-    assert isinstance(pages, list)
-    assert len(pages) == 1
-    assert isinstance(summary, dict)
-    assert any(entry["token"].find("STUDY_ID") >= 0 for entry in summary.values())
+    assert [page.redacted for page in pages] == [
+        "[STUDY_ID_1] sponsored by [ORG_1]",
+        "Later [ORG_1] appeared again.",
+    ]
+    assert all("Acme Inc." not in page.redacted for page in pages)
+    assert all("ACME INC." not in page.redacted for page in pages)
+    assert "NCT12345678" not in pages[0].redacted
+    assert summary["nct12345678"] == {
+        "token": "[STUDY_ID_1]",
+        "label": "STUDY_ID",
+        "occurrences": 1,
+    }
+    assert summary["acme inc."] == {
+        "token": "[ORG_1]",
+        "label": "ORG",
+        "occurrences": 2,
+    }
