@@ -212,15 +212,8 @@ def _propagation_patterns(
     canon: dict[str, CanonicalEntity],
 ) -> list[tuple[re.Pattern[str], CanonicalEntity]]:
     patterns: list[tuple[re.Pattern[str], CanonicalEntity]] = []
-    canonical_groups: dict[str, list[CanonicalEntity]] = {}
     for canonical_key, canonical in canon.items():
-        canonical_groups.setdefault(_canonical_norm(canonical_key), []).append(canonical)
-
-    for norm_text, canonical_group in canonical_groups.items():
-        if len(canonical_group) != 1:
-            continue
-
-        canonical = canonical_group[0]
+        norm_text = _canonical_norm(canonical_key)
         parts = [re.escape(part) for part in norm_text.split(" ") if part]
         if not parts:
             continue
@@ -281,7 +274,7 @@ def _propagate_matches(
         accepted_matches: list[RawEntity] = []
         for start, end, surface_text, canonical in sorted(
             candidate_matches,
-            key=lambda item: (-(item[1] - item[0]), item[0], item[1]),
+            key=lambda item: (-(item[1] - item[0]), item[0], item[1], item[3].token, item[3].label),
         ):
             overlaps_existing = any(
                 start < blocked_end and blocked_start < end
@@ -388,13 +381,19 @@ def _render(
 
 
 def _build_summary(canon: dict[str, CanonicalEntity]) -> dict[str, dict]:
+    def _summary_key(canonical_key: str, canonical: CanonicalEntity) -> str:
+        if _CANONICAL_LABEL_SEPARATOR not in canonical_key:
+            return canonical_key
+
+        return f"{_canonical_norm(canonical_key)} ({canonical.label})"
+
     return {
-        norm_text: {
+        _summary_key(canonical_key, canonical): {
             "token": canonical.token,
             "label": canonical.label,
             "occurrences": canonical.occurrences,
         }
-        for norm_text, canonical in canon.items()
+        for canonical_key, canonical in canon.items()
     }
 
 

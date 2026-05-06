@@ -366,6 +366,34 @@ def test_build_canonical_groups_by_label():
     )
 
 
+def test_build_summary_formats_ambiguous_keys_readably():
+    canon = {
+        "acme inc.||ORG": CanonicalEntity(token="[ORG_1]", label="ORG", occurrences=2),
+        "acme inc.||PERSON": CanonicalEntity(token="[PERSON_1]", label="PERSON", occurrences=1),
+        "beta corp.": CanonicalEntity(token="[ORG_2]", label="ORG", occurrences=1),
+    }
+
+    summary = pipeline._build_summary(canon)
+
+    assert "acme inc.||ORG" not in summary
+    assert "acme inc.||PERSON" not in summary
+    assert summary["acme inc. (ORG)"] == {
+        "token": "[ORG_1]",
+        "label": "ORG",
+        "occurrences": 2,
+    }
+    assert summary["acme inc. (PERSON)"] == {
+        "token": "[PERSON_1]",
+        "label": "PERSON",
+        "occurrences": 1,
+    }
+    assert summary["beta corp."] == {
+        "token": "[ORG_2]",
+        "label": "ORG",
+        "occurrences": 1,
+    }
+
+
 def test_propagate_finds_unlabelled_occurrence():
     doc = _make_doc([
         "ACME Inc. sponsored the study.",
@@ -386,6 +414,35 @@ def test_propagate_finds_unlabelled_occurrence():
     assert all(entity.label == "ORG" for entity in new_entities)
     assert all(entity.source == "propagate" for entity in new_entities)
     assert all(entity.score == pytest.approx(0.95) for entity in new_entities)
+
+
+def test_propagate_keeps_ambiguous_normalized_text_active():
+    doc = _make_doc([
+        "Acme Inc. was reviewed.",
+        "Later Acme Inc. returned.",
+    ])
+    canon = {
+        "acme inc.||ORG": CanonicalEntity(token="[ORG_1]", label="ORG", occurrences=1),
+        "acme inc.||PERSON": CanonicalEntity(token="[PERSON_1]", label="PERSON", occurrences=1),
+    }
+    existing_entities = [
+        _make_raw_entity("ORG", "Acme Inc.", page=0, start=0, score=0.93),
+        _make_raw_entity("PERSON", "Acme Inc.", page=0, start=0, score=0.81),
+    ]
+
+    new_entities = pipeline._propagate(doc, canon, existing_entities)
+
+    assert new_entities == [
+        RawEntity(
+            page=1,
+            start=6,
+            end=15,
+            surface_text="Acme Inc.",
+            label="ORG",
+            source="propagate",
+            score=0.93,
+        )
+    ]
 
 
 def test_propagate_skips_embedded_word_matches():
