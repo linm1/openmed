@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenMed Redaction Studio</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <span class="brand">openmed · redaction studio</span>
+      <span id="docInfo" class="doc-info" aria-live="polite"></span>
+    </header>
+
+    <main class="layout">
+      <section id="uploadPane" class="upload-pane">
+        <label class="drop-zone" for="fileInput">
+          <strong>Drop a DOCX or PDF here</strong>
+          <span>or click to choose a file (≤ 25 MB)</span>
+          <input id="fileInput" type="file" accept=".docx,.pdf" hidden />
+        </label>
+        <p id="uploadStatus" class="status"></p>
+      </section>
+
+      <section id="workPane" class="work-pane" hidden>
+        <div class="controls">
+          <button id="prevPage" type="button">← prev</button>
+          <span id="pageLabel">page 1 / 1</span>
+          <button id="nextPage" type="button">next →</button>
+          <select id="methodSelect">
+            <option value="mask" selected>mask</option>
+            <option value="replace">replace</option>
+            <option value="hash">hash</option>
+            <option value="remove">remove</option>
+            <option value="shift_dates">shift_dates</option>
+          </select>
+          <button id="redactPageBtn" type="button">redact this page</button>
+          <button id="redactBatchBtn" type="button">redact all pages</button>
+          <button id="downloadBtn" type="button" disabled>download</button>
+          <button id="resetBtn" type="button" class="ghost">reset</button>
+        </div>
+        <div class="panes">
+          <article class="pane">
+            <h2>original</h2>
+            <pre id="originalText"></pre>
+          </article>
+          <article class="pane">
+            <h2>redacted</h2>
+            <pre id="redactedText"></pre>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <script src="/static/app.js" type="module"></script>
+  </body>
+</html>
