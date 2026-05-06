@@ -23,14 +23,14 @@ class CompiledPattern:
 PatternPack = list[CompiledPattern]
 
 
-def _require_string(value: object, *, field_name: str, normalize: bool = False) -> str:
+def _require_string(value: object, *, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"pattern field '{field_name}' must be a non-empty string")
-    return value.strip() if normalize else value
+    return value.strip()
 
 
 def _compile_regex(value: object, *, field_name: str, pattern_id: str) -> re.Pattern[str]:
-    regex_text = _require_string(value, field_name=field_name, normalize=True)
+    regex_text = _require_string(value, field_name=field_name)
     try:
         return re.compile(regex_text)
     except re.error as exc:
@@ -55,8 +55,8 @@ def _compile_pattern(raw_pattern: object) -> CompiledPattern | None:
     if not enabled_value:
         return None
 
-    pattern_id = _require_string(raw_pattern.get("id"), field_name="id", normalize=True)
-    label = _require_string(raw_pattern.get("label"), field_name="label", normalize=True)
+    pattern_id = _require_string(raw_pattern.get("id"), field_name="id")
+    label = _require_string(raw_pattern.get("label"), field_name="label")
 
     post_validate_value = raw_pattern.get("post_validate")
     post_validate = (
@@ -87,8 +87,12 @@ def load_pack(path: Path | None = None) -> PatternPack:
         raise ValueError("pattern pack must define [[patterns]] entries")
 
     compiled_patterns: PatternPack = []
+    seen_pattern_ids: set[str] = set()
     for raw_pattern in raw_patterns:
         compiled_pattern = _compile_pattern(raw_pattern)
         if compiled_pattern is not None:
+            if compiled_pattern.id in seen_pattern_ids:
+                raise ValueError(f"duplicate pattern id '{compiled_pattern.id}' in pattern pack")
+            seen_pattern_ids.add(compiled_pattern.id)
             compiled_patterns.append(compiled_pattern)
     return compiled_patterns

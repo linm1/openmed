@@ -209,6 +209,28 @@ enabled = true
     assert [pattern.id for pattern in pack] == ["enabled_ok"]
 
 
+def test_load_pack_rejects_duplicate_pattern_ids_after_normalization(tmp_path):
+    pack_path = _write_pack(
+        tmp_path,
+        '''
+[[patterns]]
+id = " foo "
+label = "FOO"
+regex = "\\\\bfoo\\\\b"
+enabled = true
+
+[[patterns]]
+id = "foo"
+label = "BAR"
+regex = "\\\\bbar\\\\b"
+enabled = true
+''',
+    )
+
+    with pytest.raises(ValueError, match=r"duplicate pattern id 'foo' in pattern pack"):
+        load_pack(pack_path)
+
+
 def test_load_pack_rejects_non_list_patterns(tmp_path):
     pack_path = _write_pack(
         tmp_path,
