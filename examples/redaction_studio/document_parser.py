@@ -39,3 +39,40 @@ def parse_docx(raw: bytes) -> list[PageSlice]:
     return [PageSlice(index=i, text="\n".join(p)) for i, p in enumerate(pages)] or [
         PageSlice(index=0, text="")
     ]
+
+
+try:
+    import pdfplumber as _pdfplumber
+
+    PDF_AVAILABLE = True
+except ImportError:
+    _pdfplumber = None
+    PDF_AVAILABLE = False
+
+
+def parse_pdf(raw: bytes) -> list[PageSlice]:
+    if not PDF_AVAILABLE:
+        raise RuntimeError("pdfplumber not installed. Install with `pip install openmed[redaction]`.")
+    pages: list[PageSlice] = []
+    with _pdfplumber.open(io.BytesIO(raw)) as pdf:
+        for i, page in enumerate(pdf.pages):
+            pages.append(PageSlice(index=i, text=page.extract_text() or ""))
+    return pages or [PageSlice(index=0, text="")]
+
+
+def parse(filename: str, raw: bytes) -> list[PageSlice]:
+    lower = filename.lower()
+    if lower.endswith(".docx"):
+        return parse_docx(raw)
+    if lower.endswith(".pdf"):
+        return parse_pdf(raw)
+    raise ValueError(f"Unsupported file type: {filename}")
+
+
+def detect_format(filename: str) -> str:
+    lower = filename.lower()
+    if lower.endswith(".docx"):
+        return "docx"
+    if lower.endswith(".pdf"):
+        return "pdf"
+    raise ValueError(f"Unsupported file type: {filename}")

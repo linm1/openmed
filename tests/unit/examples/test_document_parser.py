@@ -46,3 +46,38 @@ def test_parse_docx_single_page_when_no_breaks():
     pages = parse_docx(raw)
     assert len(pages) == 1
     assert pages[0].text.count("\n") >= 1
+
+
+reportlab = pytest.importorskip("reportlab.pdfgen.canvas")
+
+from examples.redaction_studio.document_parser import parse_pdf, parse
+
+
+def _build_pdf(pages_text: list[str]) -> bytes:
+    from reportlab.pdfgen.canvas import Canvas
+
+    buf = io.BytesIO()
+    c = Canvas(buf)
+    for text in pages_text:
+        c.drawString(72, 720, text)
+        c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def test_parse_pdf_yields_one_slice_per_page():
+    raw = _build_pdf(["Page one carries Captain Vogel.", "Page two mentions Marseille."])
+    pages = parse_pdf(raw)
+    assert len(pages) == 2
+    assert pages[0].index == 0
+    assert "Vogel" in pages[0].text
+    assert "Marseille" in pages[1].text
+
+
+def test_parse_dispatcher_routes_by_filename():
+    docx_raw = _build_docx([["alpha"], ["beta"]])
+    pdf_raw = _build_pdf(["gamma"])
+    assert len(parse("doc.docx", docx_raw)) == 2
+    assert len(parse("doc.pdf", pdf_raw)) == 1
+    with pytest.raises(ValueError, match="Unsupported"):
+        parse("doc.txt", b"")
