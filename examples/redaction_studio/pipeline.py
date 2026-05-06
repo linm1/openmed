@@ -160,6 +160,14 @@ def _lookup_canonical(
     return None
 
 
+def _resolve_token(entity: RawEntity, canon: dict[str, CanonicalEntity]) -> str:
+    canonical = _lookup_canonical(canon, _norm(entity.surface_text), entity.label)
+    if canonical is None:
+        return f"[{entity.label}]"
+
+    return canonical.token
+
+
 def _build_canonical(entities: list[RawEntity]) -> dict[str, CanonicalEntity]:
     grouped: dict[tuple[str, str], dict[str, int | str]] = {}
     for entity in entities:
@@ -343,13 +351,13 @@ def _render(
             page_entities.get(page.page_number, []),
             key=lambda entity: (entity.start, entity.end),
         )
+        resolved_entities = [
+            (entity, _resolve_token(entity, canon))
+            for entity in current_entities
+        ]
         redacted_text = page.text
         entity_payload: list[dict] = []
-        for entity in current_entities:
-            token = f"[{entity.label}]"
-            canonical = _lookup_canonical(canon, _norm(entity.surface_text), entity.label)
-            if canonical is not None:
-                token = canonical.token
+        for entity, token in resolved_entities:
             entity_payload.append(
                 {
                     "label": entity.label,
@@ -362,11 +370,7 @@ def _render(
                 }
             )
 
-        for entity in sorted(current_entities, key=lambda item: (item.start, item.end), reverse=True):
-            token = f"[{entity.label}]"
-            canonical = _lookup_canonical(canon, _norm(entity.surface_text), entity.label)
-            if canonical is not None:
-                token = canonical.token
+        for entity, token in reversed(resolved_entities):
             redacted_text = redacted_text[:entity.start] + token + redacted_text[entity.end:]
 
         rendered_pages.append(

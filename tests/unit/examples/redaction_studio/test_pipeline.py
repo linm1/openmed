@@ -497,6 +497,33 @@ def test_resolve_overlaps_keeps_longest():
     assert resolved == [_make_raw_entity("ORG", "Acme Inc.", start=0)]
 
 
+def test_render_uses_same_token_in_entity_payload_and_redacted_text():
+    doc = _make_doc(["Acme Inc. funded the trial."])
+    entities = [_make_raw_entity("ORG", "Acme Inc.", start=0)]
+    canon = {
+        "acme inc.": CanonicalEntity(token="[ORG_1]", label="ORG", occurrences=1)
+    }
+    lookup_mock = MagicMock(
+        side_effect=[
+            CanonicalEntity(token="[ORG_1]", label="ORG", occurrences=1),
+            CanonicalEntity(token="[ORG_2]", label="ORG", occurrences=1),
+        ]
+    )
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(pipeline, "_lookup_canonical", lookup_mock)
+
+    try:
+        pages = pipeline._render(doc, entities, canon)
+    finally:
+        monkeypatch.undo()
+
+    assert len(pages) == 1
+    assert lookup_mock.call_count == 1
+    assert pages[0].entities[0]["token"] == "[ORG_1]"
+    assert pages[0].redacted == "[ORG_1] funded the trial."
+    assert pages[0].entities[0]["token"] in pages[0].redacted
+
+
 def test_run_returns_redacted_pages_and_summary(monkeypatch):
     doc = _make_doc([
         "NCT12345678 sponsored by Acme Inc. for Project Atlas.",
