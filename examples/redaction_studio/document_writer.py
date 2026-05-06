@@ -47,4 +47,36 @@ def write_docx(doc: UploadedDoc, redacted: dict[int, RedactedPage]) -> bytes:
 
 
 def write_pdf(doc: UploadedDoc, redacted: dict[int, RedactedPage]) -> bytes:
-    raise NotImplementedError  # filled in next task
+    if not PDF_AVAILABLE:
+        raise RuntimeError("reportlab not installed.")
+    buf = io.BytesIO()
+    c = _Canvas(buf, pagesize=_LETTER)
+    width, height = _LETTER
+    margin = 72
+    line_height = 14
+    max_chars = 90
+
+    for i, _page in enumerate(doc.pages):
+        body = _final_text_for(i, doc, redacted)
+        y = height - margin
+        for raw_line in body.split("\n"):
+            chunks = [raw_line[j : j + max_chars] for j in range(0, max(1, len(raw_line)), max_chars)] or [""]
+            for chunk in chunks:
+                if y < margin:
+                    c.showPage()
+                    y = height - margin
+                c.drawString(margin, y, chunk)
+                y -= line_height
+        c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+def write(doc: UploadedDoc, redacted: dict[int, RedactedPage]) -> tuple[bytes, str]:
+    if doc.fmt == "docx":
+        return write_docx(doc, redacted), (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+    if doc.fmt == "pdf":
+        return write_pdf(doc, redacted), "application/pdf"
+    raise ValueError(f"Unsupported fmt: {doc.fmt}")

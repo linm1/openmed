@@ -44,3 +44,35 @@ def test_write_docx_falls_back_to_original_when_page_not_redacted():
     text = "\n".join(p.text for p in docx.Document(io.BytesIO(out)).paragraphs)
     assert "[A]" in text
     assert "Original B" in text
+
+
+from examples.redaction_studio.document_writer import write as write_doc
+
+
+def test_write_pdf_emits_redacted_text_per_page():
+    doc = _doc(("Original A.", "Original B."), fmt="pdf")
+    redacted = {0: RedactedPage(0, "Original A.", "[REDACTED A]", ())}
+
+    out = write_pdf(doc, redacted)
+
+    with pdfplumber.open(io.BytesIO(out)) as pdf:
+        assert len(pdf.pages) == 2
+        page0 = pdf.pages[0].extract_text() or ""
+        page1 = pdf.pages[1].extract_text() or ""
+    assert "[REDACTED A]" in page0
+    assert "Original B" in page1
+
+
+def test_write_dispatches_by_fmt():
+    doc_docx = _doc(("a", "b"), fmt="docx")
+    body, mime = write_doc(doc_docx, {})
+    assert mime.startswith("application/vnd.openxmlformats")
+    assert isinstance(body, bytes) and len(body) > 0
+
+    doc_pdf = _doc(("a",), fmt="pdf")
+    body_p, mime_p = write_doc(doc_pdf, {})
+    assert mime_p == "application/pdf"
+
+    bad = _doc(("a",), fmt="txt")
+    with pytest.raises(ValueError):
+        write_doc(bad, {})
