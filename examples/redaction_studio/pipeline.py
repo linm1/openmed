@@ -5,6 +5,7 @@ import re
 
 from openmed import deidentify as _deidentify
 
+from .pattern_loader import PatternPack
 from .types import RawEntity, RedactionContext, UploadedDoc
 
 log = logging.getLogger(__name__)
@@ -41,6 +42,53 @@ def _entity_score(entity: object) -> float:
         return float(score)
 
     raise AttributeError("deidentify entity is missing `confidence` and `score`.")
+
+
+def _regex_pass(doc: UploadedDoc, pack: PatternPack, ctx: RedactionContext) -> list[RawEntity]:
+    allowed = set(ctx.enabled_pattern_ids)
+    entities: list[RawEntity] = []
+    for page in doc.pages:
+        for pattern in pack:
+            if allowed and pattern.id not in allowed:
+                continue
+            for match in pattern.regex.finditer(page.text):
+                text = match.group(0)
+                if pattern.post_validate is not None and not pattern.post_validate.search(text):
+                    continue
+                entities.append(
+                    RawEntity(
+                        page=page.page_number,
+                        start=match.start(),
+                        end=match.end(),
+                        surface_text=text,
+                        label=pattern.label,
+                        source="regex",
+                        score=1.0,
+                    )
+                )
+    return entities
+
+
+def _user_term_pass(doc: UploadedDoc, ctx: RedactionContext) -> list[RawEntity]:
+    entities: list[RawEntity] = []
+    for term in ctx.custom_terms:
+        if not term:
+            continue
+        pattern = re.compile(re.escape(term))
+        for page in doc.pages:
+            for match in pattern.finditer(page.text):
+                entities.append(
+                    RawEntity(
+                        page=page.page_number,
+                        start=match.start(),
+                        end=match.end(),
+                        surface_text=match.group(0),
+                        label="CUSTOM",
+                        source="user",
+                        score=1.0,
+                    )
+                )
+    return entities
 
 
 def _ner_pass(doc: UploadedDoc, ctx: RedactionContext) -> list[RawEntity]:

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from examples.redaction_studio import pipeline
+from examples.redaction_studio.pattern_loader import load_pack
 from examples.redaction_studio.types import PageSlice, RawEntity, RedactionContext, UploadedDoc
 from openmed.core.pii import DeidentificationResult, PIIEntity
 
@@ -262,3 +263,45 @@ def test_post_validate_passes_unknown_labels():
     entities = pipeline._post_validate_ner([entity])
 
     assert entities == [entity]
+
+
+def test_regex_pass_finds_nct():
+    doc = _make_doc(["Study NCT12345678 ongoing"])
+    ctx = RedactionContext()
+    pack = load_pack()
+
+    entities = pipeline._regex_pass(doc, pack, ctx)
+
+    assert entities == [
+        RawEntity(
+            page=0,
+            start=6,
+            end=17,
+            surface_text="NCT12345678",
+            label="STUDY_ID",
+            source="regex",
+            score=1.0,
+        )
+    ]
+
+
+def test_regex_pass_respects_enabled_pattern_ids():
+    doc = _make_doc(["Study NCT12345678 and SOP-AB-001 ongoing"])
+    ctx = RedactionContext(enabled_pattern_ids=("nct_study_id",))
+    pack = load_pack()
+
+    entities = pipeline._regex_pass(doc, pack, ctx)
+
+    assert any(entity.label == "STUDY_ID" for entity in entities)
+    assert all(entity.label != "INTERNAL_DOC" for entity in entities)
+
+
+def test_user_term_pass_finds_exact_match():
+    doc = _make_doc(["Sponsor: Acme Pharma. Contact: Acme Pharma team."])
+    ctx = RedactionContext(custom_terms=("Acme Pharma",))
+
+    entities = pipeline._user_term_pass(doc, ctx)
+
+    assert len(entities) == 2
+    assert all(entity.label == "CUSTOM" for entity in entities)
+    assert all(entity.source == "user" for entity in entities)
