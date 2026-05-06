@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 
 
 @dataclass(frozen=True, init=False)
@@ -18,6 +18,14 @@ class PageSlice:
         *,
         index: int | None = None,
     ) -> None:
+        if (
+            page_number is not None
+            and index is not None
+            and page_number != index
+        ):
+            raise TypeError(
+                "PageSlice received conflicting values for `page_number` and `index`."
+            )
         resolved_page_number = page_number if page_number is not None else index
         if resolved_page_number is None:
             raise TypeError("PageSlice requires `page_number` or `index`.")
@@ -83,7 +91,10 @@ class UploadedDoc:
         if not self.fmt:
             self.fmt = _infer_format(self.filename)
         if self.created_at == 0.0 and self.uploaded_at is not None:
-            self.created_at = self.uploaded_at.timestamp()
+            uploaded_at = self.uploaded_at
+            if uploaded_at.tzinfo is None:
+                uploaded_at = uploaded_at.replace(tzinfo=UTC)
+            self.created_at = uploaded_at.timestamp()
 
 
 def _infer_format(filename: str) -> str:
