@@ -17,6 +17,9 @@ def redact_page(*, index: int, text: str, method: Method = "mask") -> RedactedPa
         return RedactedPage(index=index, original=text, redacted=text, entities=())
 
     result = _deidentify(text, method=method)
+    raw_entities = getattr(result, "pii_entities", None)
+    if raw_entities is None:
+        raw_entities = getattr(result, "entities", ())
     entities = tuple(
         {
             "label": getattr(e, "label", "PII"),
@@ -25,7 +28,7 @@ def redact_page(*, index: int, text: str, method: Method = "mask") -> RedactedPa
             "text": getattr(e, "text", ""),
             "score": float(getattr(e, "confidence", getattr(e, "score", 0.0))),
         }
-        for e in (result.pii_entities or [])
+        for e in (raw_entities or [])
     )
     return RedactedPage(
         index=index,
