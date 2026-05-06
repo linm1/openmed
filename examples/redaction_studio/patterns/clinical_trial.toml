@@ -25,7 +25,7 @@ enabled = true
 [[patterns]]
 id = "project_number_6digit"
 label = "PROJECT_NUMBER"
-regex = "\\b(?:PROJECT[-_ ]?)?\\d{6}\\b"
+regex = "\\bPROJECT[-_ ]?\\d{6}\\b"
 enabled = true
 
 [[patterns]]

@@ -76,10 +76,20 @@ def load_pack(path: Path | None = None) -> PatternPack:
 
     compiled_patterns: PatternPack = []
     for raw_pattern in raw_patterns:
-        compiled_pattern = _compile_pattern(raw_pattern)
+        if not isinstance(raw_pattern, dict):
+            raise ValueError("each pattern entry must be a TOML table")
+
         enabled_value = raw_pattern.get("enabled", True)
         if not isinstance(enabled_value, bool):
-            raise ValueError(f"pattern '{compiled_pattern.id}' field 'enabled' must be a bool")
-        if enabled_value:
-            compiled_patterns.append(compiled_pattern)
+            pattern_id_value = raw_pattern.get("id")
+            pattern_id = (
+                pattern_id_value.strip()
+                if isinstance(pattern_id_value, str) and pattern_id_value.strip()
+                else "<unknown>"
+            )
+            raise ValueError(f"pattern '{pattern_id}' field 'enabled' must be a bool")
+        if not enabled_value:
+            continue
+
+        compiled_patterns.append(_compile_pattern(raw_pattern))
     return compiled_patterns

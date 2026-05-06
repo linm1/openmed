@@ -57,6 +57,8 @@ def test_project_number_post_validate_removed_when_regex_is_sufficient():
     pack = load_pack()
     project_number = next(p for p in pack if p.id == "project_number_6digit")
     assert project_number.post_validate is None
+    assert project_number.regex.search("PROJECT 123456") is not None
+    assert project_number.regex.search("123456") is None
 
 
 def test_company_suffix_matches_organization_names():
@@ -125,6 +127,29 @@ def test_load_pack_rejects_invalid_regex_fields(tmp_path, field_name):
         load_pack(pack_path)
 
 
+def test_load_pack_skips_disabled_pattern_before_regex_compilation(tmp_path):
+    pack_path = _write_pack(
+        tmp_path,
+        '''
+[[patterns]]
+id = "disabled_bad_regex"
+label = "IGNORED"
+regex = "["
+enabled = false
+
+[[patterns]]
+id = "enabled_ok"
+label = "OK"
+regex = "\\\\bok\\\\b"
+enabled = true
+''',
+    )
+
+    pack = load_pack(pack_path)
+
+    assert [pattern.id for pattern in pack] == ["enabled_ok"]
+
+
 def test_load_pack_rejects_non_list_patterns(tmp_path):
     pack_path = _write_pack(
         tmp_path,
@@ -172,7 +197,7 @@ enabled = "true"
         load_pack(pack_path)
 
 
-def test_pattern_loader_uses_tomli_fallback(monkeypatch):
+def test_pattern_loader_uses_tomli_fallback(monkeypatch, tmp_path):
     module_path = (
         Path(__file__).resolve().parents[4]
         / "examples"
@@ -188,8 +213,19 @@ def test_pattern_loader_uses_tomli_fallback(monkeypatch):
 
     module = importlib.util.module_from_spec(spec)
     fake_tomli = types.ModuleType("tomli")
-    fake_tomli.load = lambda handle: {"patterns": []}
     real_import = builtins.__import__
+    fake_tomli.load = real_import("tomllib").load
+
+    pack_path = _write_pack(
+        tmp_path,
+        '''
+[[patterns]]
+id = "foo"
+label = "FOO"
+regex = "\\\\bfoo\\\\b"
+enabled = true
+''',
+    )
 
     def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
         if name == "tomllib":
@@ -205,3 +241,5 @@ def test_pattern_loader_uses_tomli_fallback(monkeypatch):
     spec.loader.exec_module(module)
 
     assert module.tomllib is fake_tomli
+    pack = module.load_pack(pack_path)
+    assert [pattern.id for pattern in pack] == ["foo"]
