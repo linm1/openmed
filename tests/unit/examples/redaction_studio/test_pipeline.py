@@ -286,7 +286,7 @@ def test_regex_pass_finds_nct():
 
 
 def test_regex_pass_respects_enabled_pattern_ids():
-    doc = _make_doc(["Study NCT12345678 and SOP-AB-001 ongoing"])
+    doc = _make_doc(["Study NCT12345678 and SOP-123 ongoing"])
     ctx = RedactionContext(enabled_pattern_ids=("nct_study_id",))
     pack = load_pack()
 
