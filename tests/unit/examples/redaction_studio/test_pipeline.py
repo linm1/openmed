@@ -8,7 +8,7 @@ import pytest
 
 from examples.redaction_studio import pipeline
 from examples.redaction_studio.pattern_loader import load_pack
-from examples.redaction_studio.types import CanonicalEntity, PageSlice, RawEntity, RedactionContext, UploadedDoc
+from examples.redaction_studio.types import CanonicalEntity, PageSlice, RawEntity, RedactedPage, RedactionContext, UploadedDoc
 from openmed.core.pii import DeidentificationResult, PIIEntity
 
 
@@ -529,6 +529,8 @@ def test_run_returns_redacted_pages_and_summary(monkeypatch):
 
     pages, summary = pipeline.run(doc, pack, ctx)
 
+    assert isinstance(pages, list)
+    assert all(isinstance(page, RedactedPage) for page in pages)
     assert [page.redacted for page in pages] == [
         "[STUDY_ID_1] sponsored by [ORG_1] for [CUSTOM_1].",
         "Later [ORG_1] appeared again. [CUSTOM_1] remained confidential.",
