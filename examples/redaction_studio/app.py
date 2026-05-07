@@ -192,6 +192,16 @@ def _serialize_page(page: RedactedPage) -> dict[str, Any]:
     }
 
 
+def _get_redacted_page_or_500(doc: Any, page_index: int) -> RedactedPage:
+    page = doc.redacted_pages.get(page_index)
+    if page is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Pipeline did not produce output for requested page",
+        )
+    return page
+
+
 def _uploaded_filename_stem(filename: str) -> str:
     leaf_name = filename.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
     stem, has_suffix, _suffix = leaf_name.rpartition(".")
@@ -225,12 +235,7 @@ def redact_document_page(doc_id: str, payload: DocumentRedactPageRequest) -> dic
     if payload.page >= len(doc.pages):
         raise HTTPException(status_code=400, detail="page out of range")
     doc = _run_pipeline(doc)
-    page = doc.redacted_pages.get(payload.page)
-    if page is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Pipeline did not produce output for requested page",
-        )
+    page = _get_redacted_page_or_500(doc, payload.page)
     return {
         "pageNumber": page.index,
         "redactedText": page.redacted,
@@ -244,7 +249,7 @@ def redact_page_endpoint(payload: RedactPageRequest) -> dict[str, Any]:
     if payload.pageIndex >= len(doc.pages):
         raise HTTPException(status_code=400, detail="pageIndex out of range")
     doc = _run_pipeline(doc)
-    page = doc.redacted_pages[payload.pageIndex]
+    page = _get_redacted_page_or_500(doc, payload.pageIndex)
     return {"page": _serialize_page(page)}
 
 
@@ -252,7 +257,7 @@ def redact_page_endpoint(payload: RedactPageRequest) -> dict[str, Any]:
 def redact_batch_endpoint(payload: RedactBatchRequest) -> dict[str, Any]:
     doc = _get_doc_or_404(payload.docId)
     doc = _run_pipeline(doc)
-    pages_out = [_serialize_page(doc.redacted_pages[slice_.index]) for slice_ in doc.pages]
+    pages_out = [_serialize_page(_get_redacted_page_or_500(doc, slice_.index)) for slice_ in doc.pages]
     return {
         "redactedCount": len(pages_out),
         "pages": pages_out,
