@@ -404,10 +404,8 @@ async function redactBatch() {
   }
 
   try {
-    const resp = await fetch("/api/redact/batch", {
+    const resp = await fetch(`/api/documents/${state.docId}/redact-batch`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ docId: state.docId }),
     });
 
     if (!resp.ok) {

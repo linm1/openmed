@@ -275,6 +275,18 @@ def redact_page_endpoint(payload: RedactPageRequest) -> dict[str, Any]:
     return {"page": _serialize_page(page)}
 
 
+@app.post("/api/documents/{doc_id}/redact-batch")
+def redact_document_batch(doc_id: str) -> dict[str, Any]:
+    doc = _get_doc_or_404(doc_id)
+    doc = _run_pipeline(doc)
+    pages_out = [_serialize_page(_get_redacted_page_or_500(doc, slice_.index)) for slice_ in doc.pages]
+    return {
+        "redactedCount": len(pages_out),
+        "pages": pages_out,
+        "canonical": dict(doc.canonical_summary),
+    }
+
+
 @app.post("/api/redact/batch")
 def redact_batch_endpoint(payload: RedactBatchRequest) -> dict[str, Any]:
     doc = _get_doc_or_404(payload.docId)
