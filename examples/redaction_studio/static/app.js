@@ -36,6 +36,13 @@ async function readErrorDetail(resp) {
   }
 }
 
+function describeRequestError(error) {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return "network error";
+}
+
 function defaultEnabledPatternIds() {
   return state.availablePatterns
     .filter((pattern) => pattern.enabled_by_default)
@@ -252,21 +259,27 @@ async function patchContext(partial = {}) {
     ),
   };
 
-  const resp = await fetch(`/api/documents/${state.docId}/context`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  try {
+    const resp = await fetch(`/api/documents/${state.docId}/context`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
 
-  if (!resp.ok) {
-    alert(`Context update failed: ${await readErrorDetail(resp)}`);
+    if (!resp.ok) {
+      alert(`Context update failed: ${await readErrorDetail(resp)}`);
+      return false;
+    }
+
+    const { context } = await resp.json();
+    applyContext(context);
+    renderSidebar();
+    return true;
+  } catch (error) {
+    console.error(error);
+    alert(`Context update failed: ${describeRequestError(error)}`);
     return false;
   }
-
-  const { context } = await resp.json();
-  applyContext(context);
-  renderSidebar();
-  return true;
 }
 
 async function addCustomTerm() {
@@ -354,50 +367,30 @@ async function redactCurrent() {
     return;
   }
 
-  const resp = await fetch(`/api/documents/${state.docId}/redact-page`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ page: state.current }),
-  });
+  try {
+    const resp = await fetch(`/api/documents/${state.docId}/redact-page`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ page: state.current }),
+    });
 
-  if (!resp.ok) {
-    alert(`Redaction failed: ${await readErrorDetail(resp)}`);
-    return;
+    if (!resp.ok) {
+      alert(`Redaction failed: ${await readErrorDetail(resp)}`);
+      return;
+    }
+
+    const data = await resp.json();
+    state.redacted[data.pageNumber] = {
+      index: data.pageNumber,
+      redacted: data.redactedText,
+    };
+    setCanonicalSummary(data.canonical);
+    renderPage();
+    renderSidebar();
+  } catch (error) {
+    console.error(error);
+    alert(`Redaction failed: ${describeRequestError(error)}`);
   }
-
-  const data = await resp.json();
-  state.redacted[data.pageNumber] = {
-    index: data.pageNumber,
-    redacted: data.redactedText,
-  };
-  setCanonicalSummary(data.canonical);
-  renderPage();
-  renderSidebar();
-}
-
-async function refreshCanonicalForCurrentPage() {
-  if (state.docId == null || state.pages.length === 0) {
-    return;
-  }
-
-  const resp = await fetch(`/api/documents/${state.docId}/redact-page`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ page: state.current }),
-  });
-
-  if (!resp.ok) {
-    return;
-  }
-
-  const data = await resp.json();
-  state.redacted[data.pageNumber] = {
-    index: data.pageNumber,
-    redacted: data.redactedText,
-  };
-  setCanonicalSummary(data.canonical);
-  renderPage();
-  renderSidebar();
 }
 
 async function redactBatch() {
@@ -405,27 +398,30 @@ async function redactBatch() {
     return;
   }
 
-  const method = $("methodSelect").value;
-  const resp = await fetch("/api/redact/batch", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ docId: state.docId, method }),
-  });
+  try {
+    const resp = await fetch("/api/redact/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ docId: state.docId }),
+    });
 
-  if (!resp.ok) {
-    alert(`Batch redaction failed: ${await readErrorDetail(resp)}`);
-    return;
+    if (!resp.ok) {
+      alert(`Batch redaction failed: ${await readErrorDetail(resp)}`);
+      return;
+    }
+
+    const data = await resp.json();
+    data.pages.forEach((page) => {
+      state.redacted[page.index] = page;
+    });
+
+    setCanonicalSummary(data.canonical);
+    renderPage();
+    renderSidebar();
+  } catch (error) {
+    console.error(error);
+    alert(`Batch redaction failed: ${describeRequestError(error)}`);
   }
-
-  const { pages } = await resp.json();
-  pages.forEach((page) => {
-    state.redacted[page.index] = page;
-  });
-
-  setCanonicalSummary({});
-  renderPage();
-  renderSidebar();
-  await refreshCanonicalForCurrentPage();
 }
 
 async function uploadFile(file) {
@@ -439,38 +435,47 @@ async function uploadFile(file) {
   const fd = new FormData();
   fd.append("file", file);
 
-  const uploadResp = await fetch("/api/upload", { method: "POST", body: fd });
-  if (!uploadResp.ok) {
-    setStatus(`Upload failed: ${await readErrorDetail(uploadResp)}`, "error");
-    return;
+  try {
+    const uploadResp = await fetch("/api/upload", { method: "POST", body: fd });
+    if (!uploadResp.ok) {
+      setStatus(`Upload failed: ${await readErrorDetail(uploadResp)}`, "error");
+      return;
+    }
+
+    const meta = await uploadResp.json();
+    const listingResp = await fetch(`/api/documents/${meta.docId}`);
+    if (!listingResp.ok) {
+      setStatus(`Listing failed: ${await readErrorDetail(listingResp)}`, "error");
+      return;
+    }
+
+    const listing = await listingResp.json();
+    state.docId = meta.docId;
+    state.fmt = meta.fmt;
+    state.pages = Array.isArray(listing.pages) ? listing.pages : [];
+    state.redacted = {};
+    state.current = 0;
+    setCanonicalSummary({});
+    applyContext(listing.context);
+
+    $("docInfo").textContent = `${meta.filename} - ${meta.pageCount} page(s)`;
+    setStatus("", "info");
+    showWorkPane(true);
+    renderPage();
+    renderSidebar();
+  } catch (error) {
+    console.error(error);
+    setStatus(`Upload failed: ${describeRequestError(error)}`, "error");
   }
-
-  const meta = await uploadResp.json();
-  const listingResp = await fetch(`/api/documents/${meta.docId}`);
-  if (!listingResp.ok) {
-    setStatus(`Listing failed: ${await readErrorDetail(listingResp)}`, "error");
-    return;
-  }
-
-  const listing = await listingResp.json();
-  state.docId = meta.docId;
-  state.fmt = meta.fmt;
-  state.pages = Array.isArray(listing.pages) ? listing.pages : [];
-  state.redacted = {};
-  state.current = 0;
-  setCanonicalSummary({});
-  applyContext(listing.context);
-
-  $("docInfo").textContent = `${meta.filename} - ${meta.pageCount} page(s)`;
-  setStatus("", "info");
-  showWorkPane(true);
-  renderPage();
-  renderSidebar();
 }
 
 async function reset() {
   if (state.docId) {
-    await fetch(`/api/documents/${state.docId}`, { method: "DELETE" });
+    try {
+      await fetch(`/api/documents/${state.docId}`, { method: "DELETE" });
+    } catch (error) {
+      console.error(error);
+    }
   }
 
   state.docId = null;

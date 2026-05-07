@@ -248,7 +248,11 @@ def redact_batch_endpoint(payload: RedactBatchRequest) -> dict[str, Any]:
     doc = _get_doc_or_404(payload.docId)
     doc = _run_pipeline(doc)
     pages_out = [_serialize_page(doc.redacted_pages[slice_.index]) for slice_ in doc.pages]
-    return {"redactedCount": len(pages_out), "pages": pages_out}
+    return {
+        "redactedCount": len(pages_out),
+        "pages": pages_out,
+        "canonical": dict(doc.canonical_summary),
+    }
 
 
 @app.get("/api/download/{doc_id}")

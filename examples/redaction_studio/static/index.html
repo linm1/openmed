@@ -41,13 +41,16 @@
                 </div>
                 <div class="controls-group">
                   <label class="field-label" for="methodSelect">Redaction method</label>
-                  <select id="methodSelect">
+                  <select id="methodSelect" aria-describedby="methodHelp" disabled>
                     <option value="mask" selected>mask</option>
                     <option value="replace">replace</option>
                     <option value="hash">hash</option>
                     <option value="remove">remove</option>
                     <option value="shift_dates">shift_dates</option>
                   </select>
+                  <p id="methodHelp" class="field-help">
+                    The pipeline sidebar flow currently renders canonical placeholder tokens.
+                  </p>
                 </div>
                 <div class="controls-group">
                   <span class="field-label">Actions</span>

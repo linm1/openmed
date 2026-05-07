@@ -276,4 +276,5 @@ def test_legacy_redact_routes_ignore_method_field(
     assert page_response.json()["page"]["redacted"] == "Patient [NAME_1] joined trial [TRIAL_ID_1]."
     assert batch_response.status_code == 200, batch_response.text
     assert batch_response.json()["redactedCount"] == 2
+    assert batch_response.json()["canonical"]["jane doe"]["token"] == "[NAME_1]"
     assert run_mock.call_count == 2
