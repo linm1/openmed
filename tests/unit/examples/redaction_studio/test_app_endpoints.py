@@ -92,6 +92,29 @@ def test_download_sanitizes_content_disposition_filename(
     )
 
 
+def test_download_adds_utf8_filename_for_non_ascii_names(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    doc = _make_doc(doc_id="doc-download-utf8")
+    doc.filename = "résumé.pdf"
+    app_module.store.put(doc)
+    monkeypatch.setattr(
+        app_module,
+        "_write_doc",
+        lambda current_doc, redacted_pages: (b"redacted", "application/pdf"),
+        raising=False,
+    )
+
+    response = client.get(f"/api/download/{doc.doc_id}")
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-disposition"] == (
+        "attachment; filename=\"r_sum_.redacted.pdf\"; "
+        "filename*=UTF-8''r%C3%A9sum%C3%A9.redacted.pdf"
+    )
+
+
 def test_patch_context_updates_confidence(client: TestClient):
     doc = _make_doc()
     app_module.store.put(doc)

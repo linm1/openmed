@@ -5,6 +5,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
@@ -221,6 +222,21 @@ def _sanitize_download_filename_stem(filename: str) -> str:
     return safe_stem or "document"
 
 
+def _content_disposition_filename(filename: str) -> str:
+    ascii_fallback = "".join(
+        character if ord(character) < 128 else "_"
+        for character in filename
+    )
+    if ascii_fallback == filename:
+        return f'attachment; filename="{filename}"'
+
+    encoded = quote(filename, safe="")
+    return (
+        f'attachment; filename="{ascii_fallback}"; '
+        f"filename*=UTF-8''{encoded}"
+    )
+
+
 @app.patch("/api/documents/{doc_id}/context")
 def update_context(doc_id: str, payload: UpdateContextRequest) -> dict[str, Any]:
     try:
@@ -279,7 +295,7 @@ def download(doc_id: str) -> Response:
     return Response(
         content=body,
         media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{out_name}"'},
+        headers={"Content-Disposition": _content_disposition_filename(out_name)},
     )
 
 
