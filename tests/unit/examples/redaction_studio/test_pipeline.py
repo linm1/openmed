@@ -133,6 +133,7 @@ def test_ner_pass_restores_offsets_after_leading_whitespace(monkeypatch):
 
     deidentify_mock.assert_called_once_with(
         "John Smith",
+        model_name=pipeline._MODEL_NAME,
         confidence_threshold=ctx.confidence_threshold,
     )
 

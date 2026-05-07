@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+from pathlib import Path
 
 from openmed import deidentify as _deidentify
 
@@ -9,6 +11,35 @@ from .pattern_loader import PatternPack
 from .types import CanonicalEntity, RawEntity, RedactedPage, RedactionContext, UploadedDoc
 
 log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Local model resolution
+# ---------------------------------------------------------------------------
+_HF_MODEL_ID = "OpenMed/OpenMed-PII-SuperClinical-Small-44M-v1"
+_DEFAULT_LOCAL_MODEL_DIR = Path(__file__).resolve().parent.parent.parent / "models" / "pii-superclinical-small"
+
+def _resolve_model_name() -> str:
+    """Return the model path/ID to use for inference.
+
+    Resolution order:
+    1. ``OPENMED_MODEL`` env var (absolute path or HF model ID)
+    2. The bundled ``models/pii-superclinical-small`` directory (created by
+       ``scripts/download_model.py``) when it contains ``config.json``.
+    3. The upstream HuggingFace model ID (requires network on first run).
+    """
+    env_override = os.environ.get("OPENMED_MODEL", "").strip()
+    if env_override:
+        return env_override
+
+    if (_DEFAULT_LOCAL_MODEL_DIR / "config.json").exists():
+        log.info("Using local model at %s", _DEFAULT_LOCAL_MODEL_DIR)
+        return str(_DEFAULT_LOCAL_MODEL_DIR)
+
+    log.info("Local model not found; using HuggingFace model ID %s", _HF_MODEL_ID)
+    return _HF_MODEL_ID
+
+
+_MODEL_NAME: str = _resolve_model_name()
 
 _LABEL_VALIDATORS: dict[str, re.Pattern[str]] = {
     "health_plan_beneficiary_number": re.compile(r"^\d{9,11}$"),
@@ -100,6 +131,7 @@ def _ner_pass(doc: UploadedDoc, ctx: RedactionContext) -> list[RawEntity]:
         leading_whitespace = len(page.text) - len(stripped_text)
         result = _deidentify(
             stripped_text,
+            model_name=_MODEL_NAME,
             confidence_threshold=ctx.confidence_threshold,
         )
         for entity in _result_entities(result):
@@ -225,7 +257,8 @@ def _propagation_patterns(
         parts = [re.escape(part) for part in norm_text.split(" ") if part]
         if not parts:
             continue
-        pattern_text = rf"(?<!\w){r'\s+'.join(parts)}(?!\w)"
+        _ws = r"\s+"
+        pattern_text = rf"(?<!\w){_ws.join(parts)}(?!\w)"
         patterns.append((re.compile(pattern_text, re.IGNORECASE), canonical))
 
     return patterns
