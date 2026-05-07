@@ -1,23 +1,94 @@
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from pydantic import BaseModel, ConfigDict, Field
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from . import pipeline
 from .document_parser import detect_format, parse
+from .document_writer import write as _write_doc
+from .pattern_loader import DEFAULT_PACK_PATH, load_pack
 from .store import DocStore
+from .types import RedactedPage, RedactionContext
 from .types import UploadedDoc
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
 
-STORE = DocStore()
+store = DocStore()
+MAX_PATTERN_PREVIEW_CHARS = 120
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
+DISABLED_PATTERNS_SENTINEL = "__none__"
+
+
+class PatternResponse(BaseModel):
+    id: str
+    label: str
+    regex_preview: str
+    enabled_by_default: bool
+
+
+def _build_regex_preview(regex_text: str) -> str:
+    return (
+        regex_text
+        if len(regex_text) <= MAX_PATTERN_PREVIEW_CHARS
+        else f"{regex_text[:MAX_PATTERN_PREVIEW_CHARS - 3]}..."
+    )
+
+
+def _load_pattern_catalog(path: Path = DEFAULT_PACK_PATH) -> list[PatternResponse]:
+    with path.open("rb") as handle:
+        pack_data = tomllib.load(handle)
+
+    raw_patterns = pack_data.get("patterns", [])
+    if not isinstance(raw_patterns, list):
+        return []
+
+    pattern_catalog: list[PatternResponse] = []
+    for raw_pattern in raw_patterns:
+        if not isinstance(raw_pattern, dict):
+            continue
+        pattern_id = raw_pattern.get("id")
+        label = raw_pattern.get("label")
+        regex_text = raw_pattern.get("regex")
+        if not isinstance(pattern_id, str) or not pattern_id.strip():
+            continue
+        pattern_id = pattern_id.strip()
+        if pattern_id == DISABLED_PATTERNS_SENTINEL:
+            raise ValueError(
+                f"Pattern id {DISABLED_PATTERNS_SENTINEL!r} is reserved for the disabled-pattern sentinel."
+            )
+        if not isinstance(label, str) or not label.strip():
+            continue
+        if not isinstance(regex_text, str) or not regex_text.strip():
+            continue
+        enabled_value = raw_pattern.get("enabled", True)
+        pattern_catalog.append(
+            PatternResponse(
+                id=pattern_id,
+                label=label.strip(),
+                regex_preview=_build_regex_preview(regex_text.strip()),
+                enabled_by_default=(enabled_value if isinstance(enabled_value, bool) else True),
+            )
+        )
+    return pattern_catalog
+
+
+_pack = load_pack()
+_pattern_catalog = _load_pattern_catalog()
 
 app = FastAPI(
     title="OpenMed Redaction Studio",
@@ -32,9 +103,32 @@ def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
+def _get_doc_or_404(doc_id: str) -> UploadedDoc:
+    try:
+        return store.get(doc_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown doc_id") from exc
+
+
+def _serialize_context(context: RedactionContext) -> dict[str, Any]:
+    return {
+        "customTerms": list(context.custom_terms),
+        "confidenceThreshold": context.confidence_threshold,
+        "enabledPatternIds": list(context.enabled_pattern_ids),
+    }
+
+
+def _run_pipeline(doc: UploadedDoc) -> UploadedDoc:
+    pages, summary = pipeline.run(doc, _pack, doc.context)
+    try:
+        return store.replace_pipeline_output(doc.doc_id, pages=pages, summary=summary)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Unknown doc_id") from exc
+
+
 @app.post("/api/upload")
 async def upload(file: UploadFile = File(...)) -> dict[str, Any]:
-    raw = await file.read()
+    raw = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(raw) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="File exceeds 25 MB limit")
     try:
@@ -50,16 +144,18 @@ async def upload(file: UploadFile = File(...)) -> dict[str, Any]:
         pages=pages,
         created_at=time.time(),
     )
-    STORE.put(doc)
+    store.put(doc)
     return {"docId": doc.doc_id, "filename": doc.filename, "pageCount": len(pages), "fmt": fmt}
+
+
+@app.get("/api/patterns", response_model=list[PatternResponse])
+def list_patterns() -> list[PatternResponse]:
+    return list(_pattern_catalog)
 
 
 @app.get("/api/documents/{doc_id}")
 def list_pages(doc_id: str) -> dict[str, Any]:
-    try:
-        doc = STORE.get(doc_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Unknown doc_id") from exc
+    doc = _get_doc_or_404(doc_id)
     return {
         "docId": doc.doc_id,
         "filename": doc.filename,
@@ -67,26 +163,34 @@ def list_pages(doc_id: str) -> dict[str, Any]:
         "pageCount": len(doc.pages),
         "pages": [{"index": p.index, "text": p.text} for p in doc.pages],
         "redactedIndexes": sorted(doc.redacted_pages.keys()),
+        "context": _serialize_context(doc.context),
     }
 
 
-from pydantic import BaseModel, Field
+class LegacyCompatibleRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
 
-from .redactor import redact_page as _redact_page
 
-
-class RedactPageRequest(BaseModel):
+class RedactPageRequest(LegacyCompatibleRequest):
     docId: str
     pageIndex: int = Field(ge=0)
-    method: str = "mask"
 
 
-class RedactBatchRequest(BaseModel):
+class RedactBatchRequest(LegacyCompatibleRequest):
     docId: str
-    method: str = "mask"
 
 
-def _serialize_page(page) -> dict[str, Any]:
+class UpdateContextRequest(BaseModel):
+    customTerms: list[str] | None = None
+    confidenceThreshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    enabledPatternIds: list[str] | None = None
+
+
+class DocumentRedactPageRequest(BaseModel):
+    page: int = Field(ge=0)
+
+
+def _serialize_page(page: RedactedPage) -> dict[str, Any]:
     return {
         "index": page.index,
         "original": page.original,
@@ -95,66 +199,120 @@ def _serialize_page(page) -> dict[str, Any]:
     }
 
 
-@app.post("/api/redact/page")
-def redact_page_endpoint(payload: RedactPageRequest) -> dict[str, Any]:
+def _get_redacted_page_or_500(doc: Any, page_index: int) -> RedactedPage:
+    page = doc.redacted_pages.get(page_index)
+    if page is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Pipeline did not produce output for requested page",
+        )
+    return page
+
+
+def _uploaded_filename_stem(filename: str) -> str:
+    leaf_name = filename.replace("\\", "/").rsplit("/", maxsplit=1)[-1]
+    stem, has_suffix, _suffix = leaf_name.rpartition(".")
+    return stem if has_suffix else leaf_name
+
+
+def _sanitize_download_filename_stem(filename: str) -> str:
+    safe_stem = _uploaded_filename_stem(filename)
+    safe_stem = re.sub(r'[\x00-\x1f"\\]', "_", safe_stem)
+    safe_stem = safe_stem.strip(" .")
+    return safe_stem or "document"
+
+
+def _content_disposition_filename(filename: str) -> str:
+    ascii_fallback = "".join(
+        character if ord(character) < 128 else "_"
+        for character in filename
+    )
+    if ascii_fallback == filename:
+        return f'attachment; filename="{filename}"'
+
+    encoded = quote(filename, safe="")
+    return (
+        f'attachment; filename="{ascii_fallback}"; '
+        f"filename*=UTF-8''{encoded}"
+    )
+
+
+@app.patch("/api/documents/{doc_id}/context")
+def update_context(doc_id: str, payload: UpdateContextRequest) -> dict[str, Any]:
     try:
-        doc = STORE.get(payload.docId)
+        doc = store.update_context(
+            doc_id,
+            custom_terms=payload.customTerms,
+            confidence_threshold=payload.confidenceThreshold,
+            enabled_pattern_ids=payload.enabledPatternIds,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Unknown doc_id") from exc
+    return {"docId": doc.doc_id, "context": _serialize_context(doc.context)}
+
+
+@app.post("/api/documents/{doc_id}/redact-page")
+def redact_document_page(doc_id: str, payload: DocumentRedactPageRequest) -> dict[str, Any]:
+    doc = _get_doc_or_404(doc_id)
+    if payload.page >= len(doc.pages):
+        raise HTTPException(status_code=400, detail="page out of range")
+    doc = _run_pipeline(doc)
+    page = _get_redacted_page_or_500(doc, payload.page)
+    return {
+        "pageNumber": page.index,
+        "redactedText": page.redacted,
+        "canonical": dict(doc.canonical_summary),
+    }
+
+
+@app.post("/api/redact/page")
+def redact_page_endpoint(payload: RedactPageRequest) -> dict[str, Any]:
+    doc = _get_doc_or_404(payload.docId)
     if payload.pageIndex >= len(doc.pages):
         raise HTTPException(status_code=400, detail="pageIndex out of range")
-    try:
-        page = _redact_page(
-            index=payload.pageIndex,
-            text=doc.pages[payload.pageIndex].text,
-            method=payload.method,  # type: ignore[arg-type]
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    STORE.set_redacted_page(payload.docId, page)
+    doc = _run_pipeline(doc)
+    page = _get_redacted_page_or_500(doc, payload.pageIndex)
     return {"page": _serialize_page(page)}
+
+
+@app.post("/api/documents/{doc_id}/redact-batch")
+def redact_document_batch(doc_id: str) -> dict[str, Any]:
+    doc = _get_doc_or_404(doc_id)
+    doc = _run_pipeline(doc)
+    pages_out = [_serialize_page(_get_redacted_page_or_500(doc, slice_.index)) for slice_ in doc.pages]
+    return {
+        "redactedCount": len(pages_out),
+        "pages": pages_out,
+        "canonical": dict(doc.canonical_summary),
+    }
 
 
 @app.post("/api/redact/batch")
 def redact_batch_endpoint(payload: RedactBatchRequest) -> dict[str, Any]:
-    try:
-        doc = STORE.get(payload.docId)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Unknown doc_id") from exc
-    pages_out: list[dict[str, Any]] = []
-    for slice_ in doc.pages:
-        try:
-            page = _redact_page(index=slice_.index, text=slice_.text, method=payload.method)  # type: ignore[arg-type]
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        STORE.set_redacted_page(payload.docId, page)
-        pages_out.append(_serialize_page(page))
-    return {"redactedCount": len(pages_out), "pages": pages_out}
-
-
-from .document_writer import write as _write_doc
+    doc = _get_doc_or_404(payload.docId)
+    doc = _run_pipeline(doc)
+    pages_out = [_serialize_page(_get_redacted_page_or_500(doc, slice_.index)) for slice_ in doc.pages]
+    return {
+        "redactedCount": len(pages_out),
+        "pages": pages_out,
+        "canonical": dict(doc.canonical_summary),
+    }
 
 
 @app.get("/api/download/{doc_id}")
 def download(doc_id: str) -> Response:
-    try:
-        doc = STORE.get(doc_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Unknown doc_id") from exc
+    doc = _get_doc_or_404(doc_id)
     body, media_type = _write_doc(doc, doc.redacted_pages)
-    out_name = f"{Path(doc.filename).stem}.redacted.{doc.fmt}"
+    out_name = f"{_sanitize_download_filename_stem(doc.filename)}.redacted.{doc.fmt}"
     return Response(
         content=body,
         media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{out_name}"'},
+        headers={"Content-Disposition": _content_disposition_filename(out_name)},
     )
 
 
 @app.delete("/api/documents/{doc_id}", status_code=204)
 def delete_document(doc_id: str) -> Response:
-    try:
-        STORE.get(doc_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Unknown doc_id") from exc
-    STORE.delete(doc_id)
+    _get_doc_or_404(doc_id)
+    store.delete(doc_id)
     return Response(status_code=204)

@@ -23,31 +23,115 @@
       </section>
 
       <section id="workPane" class="work-pane" hidden>
-        <div class="controls">
-          <button id="prevPage" type="button">← prev</button>
-          <span id="pageLabel">page 1 / 1</span>
-          <button id="nextPage" type="button">next →</button>
-          <select id="methodSelect">
-            <option value="mask" selected>mask</option>
-            <option value="replace">replace</option>
-            <option value="hash">hash</option>
-            <option value="remove">remove</option>
-            <option value="shift_dates">shift_dates</option>
-          </select>
-          <button id="redactPageBtn" type="button">redact this page</button>
-          <button id="redactBatchBtn" type="button">redact all pages</button>
-          <button id="downloadBtn" type="button" disabled>download</button>
-          <button id="resetBtn" type="button" class="ghost">reset</button>
-        </div>
-        <div class="panes">
-          <article class="pane">
-            <h2>original</h2>
-            <pre id="originalText"></pre>
-          </article>
-          <article class="pane">
-            <h2>redacted</h2>
-            <pre id="redactedText"></pre>
-          </article>
+        <div class="work-grid">
+          <aside class="controls-column" aria-label="Document controls">
+            <div class="controls-panel">
+              <div class="panel-heading">
+                <h2>Controls</h2>
+                <p>Move through pages and run redaction actions.</p>
+              </div>
+              <div class="controls">
+                <div class="controls-group">
+                  <span class="field-label">Page navigation</span>
+                  <div class="nav-row">
+                    <button id="prevPage" type="button">← prev</button>
+                    <span id="pageLabel">page 1 / 1</span>
+                    <button id="nextPage" type="button">next →</button>
+                  </div>
+                </div>
+                <div class="controls-group">
+                  <label class="field-label" for="methodSelect">Redaction method</label>
+                  <select id="methodSelect" aria-describedby="methodHelp" disabled>
+                    <option value="mask" selected>mask</option>
+                    <option value="replace">replace</option>
+                    <option value="hash">hash</option>
+                    <option value="remove">remove</option>
+                    <option value="shift_dates">shift_dates</option>
+                  </select>
+                  <p id="methodHelp" class="field-help">
+                    Method selection is not yet active; this flow renders canonical placeholder tokens.
+                  </p>
+                </div>
+                <div class="controls-group">
+                  <span class="field-label">Actions</span>
+                  <div class="action-stack">
+                    <button id="redactPageBtn" type="button">redact this page</button>
+                    <button id="redactBatchBtn" type="button">redact all pages</button>
+                    <button id="downloadBtn" type="button" disabled>download</button>
+                    <button id="resetBtn" type="button" class="ghost">reset</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </aside>
+
+          <section class="viewer-column" aria-label="Document viewer">
+            <div class="panes">
+              <article class="pane">
+                <h2>original</h2>
+                <pre id="originalText"></pre>
+              </article>
+              <article class="pane">
+                <h2>redacted</h2>
+                <pre id="redactedText"></pre>
+              </article>
+            </div>
+          </section>
+
+          <aside class="sidebar" id="sidebar" aria-label="Sidebar controls">
+            <section class="sidebar-section" id="section-canonical">
+              <div class="sidebar-heading">
+                <h2>Canonical chips</h2>
+                <p>Normalized terms for the current document will land here.</p>
+              </div>
+              <div id="canonical-chips" class="chip-list" aria-label="Canonical terms"></div>
+            </section>
+
+            <section class="sidebar-section" id="section-custom-terms">
+              <div class="sidebar-heading">
+                <h2>Custom terms</h2>
+                <p>Add a term or phrase that should be included in redaction.</p>
+              </div>
+              <div id="custom-term-chips" class="chip-list" aria-label="Custom terms"></div>
+              <div class="add-term-row">
+                <input
+                  id="custom-term-input"
+                  type="text"
+                  name="custom-term"
+                  placeholder="Add a custom term"
+                  autocomplete="off"
+                />
+                <button id="add-term-btn" type="button">add</button>
+              </div>
+            </section>
+
+            <section class="sidebar-section" id="section-patterns">
+              <div class="sidebar-heading">
+                <h2>Pattern list</h2>
+                <p>Reusable matcher groups can be listed and reviewed here.</p>
+              </div>
+              <ul id="pattern-list" class="pattern-list" aria-label="Pattern list"></ul>
+            </section>
+
+            <section class="sidebar-section" id="section-confidence">
+              <div class="sidebar-heading">
+                <h2>Confidence</h2>
+                <p>Set a threshold for which matches stay visible in review.</p>
+              </div>
+              <div class="confidence-row">
+                <input
+                  id="confidence-slider"
+                  type="range"
+                  min="0.50"
+                  max="1.00"
+                  value="0.85"
+                  step="0.05"
+                  aria-label="Confidence threshold"
+                />
+                <output id="confidence-value" for="confidence-slider">0.85</output>
+              </div>
+            </section>
+          </aside>
         </div>
       </section>
     </main>
