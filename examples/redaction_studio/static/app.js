@@ -273,6 +273,9 @@ async function patchContext(partial = {}) {
 
     const { context } = await resp.json();
     applyContext(context);
+    state.redacted = {};
+    setCanonicalSummary({});
+    renderPage();
     renderSidebar();
     return true;
   } catch (error) {

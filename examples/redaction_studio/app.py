@@ -117,17 +117,8 @@ def _serialize_context(context: RedactionContext) -> dict[str, Any]:
     }
 
 
-def _snapshot_context(context: RedactionContext) -> RedactionContext:
-    return RedactionContext(
-        custom_terms=tuple(context.custom_terms),
-        confidence_threshold=context.confidence_threshold,
-        enabled_pattern_ids=tuple(context.enabled_pattern_ids),
-    )
-
-
 def _run_pipeline(doc: UploadedDoc) -> UploadedDoc:
-    context_snapshot = _snapshot_context(doc.context)
-    pages, summary = pipeline.run(doc, _pack, context_snapshot)
+    pages, summary = pipeline.run(doc, _pack, doc.context)
     try:
         return store.replace_pipeline_output(doc.doc_id, pages=pages, summary=summary)
     except KeyError as exc:
