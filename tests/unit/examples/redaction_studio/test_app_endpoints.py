@@ -195,6 +195,19 @@ def test_redact_page_uses_pipeline(client: TestClient, monkeypatch: pytest.Monke
     run_mock.assert_called_once_with(doc, app_module._pack, doc.context)
 
 
+def test_redact_page_returns_400_for_page_out_of_range(client: TestClient):
+    doc = _make_doc(doc_id="doc-range")
+    app_module.store.put(doc)
+
+    response = client.post(
+        f"/api/documents/{doc.doc_id}/redact-page",
+        json={"page": 99},
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json() == {"detail": "page out of range"}
+
+
 def test_redact_page_returns_404_when_doc_deleted_during_pipeline(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -233,6 +246,80 @@ def test_redact_page_returns_404_when_doc_deleted_during_pipeline(
     assert response.json() == {"detail": "Unknown doc_id"}
     run_mock.assert_called_once_with(doc, app_module._pack, doc.context)
     replace_mock.assert_called_once()
+
+
+def test_redact_page_returns_500_when_pipeline_omits_requested_page(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    doc = _make_doc(doc_id="doc-missing-page")
+    app_module.store.put(doc)
+    run_mock = MagicMock(
+        return_value=(
+            [
+                RedactedPage(
+                    index=1,
+                    original=doc.pages[1].text,
+                    redacted="Follow up with [NAME_1] next week.",
+                    entities=(),
+                ),
+            ],
+            {"jane doe": {"token": "[NAME_1]", "label": "NAME", "occurrences": 1}},
+        )
+    )
+    monkeypatch.setattr(app_module, "pipeline", SimpleNamespace(run=run_mock), raising=False)
+    monkeypatch.setattr(app_module, "_pack", [SimpleNamespace(id="demo", label="Demo")], raising=False)
+
+    response = client.post(
+        f"/api/documents/{doc.doc_id}/redact-page",
+        json={"page": 0},
+    )
+
+    assert response.status_code == 500, response.text
+    assert response.json() == {"detail": "Pipeline did not produce output for requested page"}
+    run_mock.assert_called_once_with(doc, app_module._pack, doc.context)
+
+
+def test_redact_batch_returns_canonical_summary(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    doc = _make_doc(doc_id="doc-batch-canonical")
+    app_module.store.put(doc)
+    run_mock = MagicMock(
+        return_value=(
+            [
+                RedactedPage(
+                    index=0,
+                    original=doc.pages[0].text,
+                    redacted="Patient [NAME_1] joined trial [TRIAL_ID_1].",
+                    entities=(),
+                ),
+                RedactedPage(
+                    index=1,
+                    original=doc.pages[1].text,
+                    redacted="Follow up with [NAME_1] next week.",
+                    entities=(),
+                ),
+            ],
+            {"jane doe": {"token": "[NAME_1]", "label": "NAME", "occurrences": 2}},
+        )
+    )
+    monkeypatch.setattr(app_module, "pipeline", SimpleNamespace(run=run_mock), raising=False)
+    monkeypatch.setattr(app_module, "_pack", [SimpleNamespace(id="demo", label="Demo")], raising=False)
+
+    response = client.post(
+        "/api/redact/batch",
+        json={"docId": doc.doc_id},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["canonical"]["jane doe"] == {
+        "token": "[NAME_1]",
+        "label": "NAME",
+        "occurrences": 2,
+    }
+    run_mock.assert_called_once_with(doc, app_module._pack, doc.context)
 
 
 def test_legacy_redact_routes_ignore_method_field(

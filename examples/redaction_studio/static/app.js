@@ -382,7 +382,9 @@ async function redactCurrent() {
     const data = await resp.json();
     state.redacted[data.pageNumber] = {
       index: data.pageNumber,
+      original: state.pages[state.current]?.text || "",
       redacted: data.redactedText,
+      entities: [],
     };
     setCanonicalSummary(data.canonical);
     renderPage();

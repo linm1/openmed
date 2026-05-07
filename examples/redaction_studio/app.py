@@ -225,7 +225,12 @@ def redact_document_page(doc_id: str, payload: DocumentRedactPageRequest) -> dic
     if payload.page >= len(doc.pages):
         raise HTTPException(status_code=400, detail="page out of range")
     doc = _run_pipeline(doc)
-    page = doc.redacted_pages[payload.page]
+    page = doc.redacted_pages.get(payload.page)
+    if page is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Pipeline did not produce output for requested page",
+        )
     return {
         "pageNumber": page.index,
         "redactedText": page.redacted,
