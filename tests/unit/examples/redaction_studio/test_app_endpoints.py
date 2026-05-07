@@ -59,6 +59,17 @@ def test_get_patterns_includes_disabled_default_pattern(client: TestClient):
     }
 
 
+def test_load_pattern_catalog_rejects_reserved_sentinel_id(tmp_path: pytest.TempPathFactory):
+    pack_path = tmp_path / "reserved-pattern.toml"
+    pack_path.write_text(
+        '[[patterns]]\nid = "__none__"\nlabel = "Reserved"\nregex = "reserved"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="reserved"):
+        app_module._load_pattern_catalog(pack_path)
+
+
 def test_download_sanitizes_content_disposition_filename(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

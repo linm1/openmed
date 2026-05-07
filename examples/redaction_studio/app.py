@@ -30,6 +30,7 @@ STATIC_DIR = ROOT / "static"
 store = DocStore()
 MAX_PATTERN_PREVIEW_CHARS = 120
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
+DISABLED_PATTERNS_SENTINEL = "__none__"
 
 
 class PatternResponse(BaseModel):
@@ -64,6 +65,11 @@ def _load_pattern_catalog(path: Path = DEFAULT_PACK_PATH) -> list[PatternRespons
         regex_text = raw_pattern.get("regex")
         if not isinstance(pattern_id, str) or not pattern_id.strip():
             continue
+        pattern_id = pattern_id.strip()
+        if pattern_id == DISABLED_PATTERNS_SENTINEL:
+            raise ValueError(
+                f"Pattern id {DISABLED_PATTERNS_SENTINEL!r} is reserved for the disabled-pattern sentinel."
+            )
         if not isinstance(label, str) or not label.strip():
             continue
         if not isinstance(regex_text, str) or not regex_text.strip():
@@ -71,7 +77,7 @@ def _load_pattern_catalog(path: Path = DEFAULT_PACK_PATH) -> list[PatternRespons
         enabled_value = raw_pattern.get("enabled", True)
         pattern_catalog.append(
             PatternResponse(
-                id=pattern_id.strip(),
+                id=pattern_id,
                 label=label.strip(),
                 regex_preview=_build_regex_preview(regex_text.strip()),
                 enabled_by_default=(enabled_value if isinstance(enabled_value, bool) else True),
@@ -111,8 +117,17 @@ def _serialize_context(context: RedactionContext) -> dict[str, Any]:
     }
 
 
+def _snapshot_context(context: RedactionContext) -> RedactionContext:
+    return RedactionContext(
+        custom_terms=tuple(context.custom_terms),
+        confidence_threshold=context.confidence_threshold,
+        enabled_pattern_ids=tuple(context.enabled_pattern_ids),
+    )
+
+
 def _run_pipeline(doc: UploadedDoc) -> UploadedDoc:
-    pages, summary = pipeline.run(doc, _pack, doc.context)
+    context_snapshot = _snapshot_context(doc.context)
+    pages, summary = pipeline.run(doc, _pack, context_snapshot)
     try:
         return store.replace_pipeline_output(doc.doc_id, pages=pages, summary=summary)
     except KeyError as exc:
