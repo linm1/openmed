@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from pathlib import Path
@@ -199,8 +200,7 @@ def _uploaded_filename_stem(filename: str) -> str:
 
 def _sanitize_download_filename_stem(filename: str) -> str:
     safe_stem = _uploaded_filename_stem(filename)
-    for unsafe_char in ('"', "\\", "\r", "\n"):
-        safe_stem = safe_stem.replace(unsafe_char, "_")
+    safe_stem = re.sub(r'[\x00-\x1f"\\]', "_", safe_stem)
     safe_stem = safe_stem.strip(" .")
     return safe_stem or "document"
 

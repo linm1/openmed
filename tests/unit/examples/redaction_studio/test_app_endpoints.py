@@ -64,7 +64,7 @@ def test_download_sanitizes_content_disposition_filename(
     monkeypatch: pytest.MonkeyPatch,
 ):
     doc = _make_doc(doc_id="doc-download")
-    doc.filename = 'evil\\danger"\r\nname.pdf'
+    doc.filename = 'evil\\danger"\r\nname\x00.pdf'
     app_module.store.put(doc)
     monkeypatch.setattr(
         app_module,
@@ -77,7 +77,7 @@ def test_download_sanitizes_content_disposition_filename(
 
     assert response.status_code == 200, response.text
     assert response.headers["content-disposition"] == (
-        'attachment; filename="danger___name.redacted.pdf"'
+        'attachment; filename="danger___name_.redacted.pdf"'
     )
 
 

@@ -33,11 +33,6 @@ class DocStore:
                 self._docs.pop(k, None)
             return stale
 
-    def set_redacted_page(self, doc_id: str, page: RedactedPage) -> None:
-        with self._lock:
-            doc = self.get(doc_id)
-            doc.redacted_pages[page.index] = page
-
     def replace_pipeline_output(
         self,
         doc_id: str,

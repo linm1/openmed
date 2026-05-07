@@ -50,9 +50,13 @@ def test_evict_older_than_drops_stale_entries():
         store.get("stale")
 
 
-def test_set_redacted_page_attaches_to_doc():
+def test_replace_pipeline_output_replaces_doc_caches():
     store = DocStore()
     store.put(_make_doc())
     page = RedactedPage(index=0, original="hello", redacted="[NAME]", entities=())
-    store.set_redacted_page("abc", page)
-    assert store.get("abc").redacted_pages[0] is page
+    summary = {"hello": {"token": "[NAME]", "label": "NAME", "occurrences": 1}}
+
+    updated = store.replace_pipeline_output("abc", pages=[page], summary=summary)
+
+    assert updated.redacted_pages == {0: page}
+    assert updated.canonical_summary == summary
