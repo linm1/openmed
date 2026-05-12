@@ -236,8 +236,11 @@ docs/api/_build/
 
 PLANS/**
 .worktrees/
-.graphify_selected_corpus/
+
+graphify-out/
 .graphify_detect.json
 .graphify_python
 .claude/
 docs/superpowers/
+
+.github/copilot-instructions.md
