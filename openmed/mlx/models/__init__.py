@@ -13,6 +13,15 @@ _SUPPORTED_TOKEN_CLASSIFICATION_MODEL_TYPES = {
     "electra": "bert",
     "openai-privacy-filter": "openai-privacy-filter",
     "privacy-filter": "openai-privacy-filter",
+    # ``OpenMed/privacy-filter-nemotron*`` is the OpenAI Privacy Filter
+    # architecture fine-tuned on the Nemotron PII dataset — same model
+    # class, different weights — so the family stays ``openai-privacy-filter``.
+    "privacy-filter-nemotron": "openai-privacy-filter",
+    "nemotron-privacy-filter": "openai-privacy-filter",
+    # Multilingual Privacy Filter uses the same model class and BIOES decoder
+    # as the upstream OpenAI Privacy Filter, with a 16-language label space.
+    "privacy-filter-multilingual": "openai-privacy-filter",
+    "multilingual-privacy-filter": "openai-privacy-filter",
     "roberta": "bert",
     "xlm-roberta": "bert",
     "xlm_roberta": "bert",
